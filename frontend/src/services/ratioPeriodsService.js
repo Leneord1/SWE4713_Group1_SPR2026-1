@@ -36,15 +36,18 @@ export function currentQuarterWeekLabels(anchor = new Date()) {
 
   /** @type {string[]} */
   const labels = [];
-  const cursor = new Date(quarterStart);
+  const endTime = today.getTime();
+  let cursor = new Date(quarterStart);
 
-  while (cursor <= today) {
+  while (cursor.getTime() <= endTime) {
     const end = new Date(cursor);
     end.setDate(end.getDate() + 6);
-    if (end > today) end.setTime(today.getTime());
+    if (end.getTime() > endTime) {
+      end.setTime(endTime);
+    }
     labels.push(toYmd(end));
     end.setDate(end.getDate() + 1);
-    cursor.setTime(end.getTime());
+    cursor = new Date(end);
   }
 
   return labels;
