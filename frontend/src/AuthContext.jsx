@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import PropTypes from 'prop-types';
 import { supabase } from './supabaseClient';
 
@@ -52,7 +52,7 @@ export function AuthProvider({ children }) {
     };
   }, []);
 
-  const login = async (email, password) => {
+  const login = useCallback(async (email, password) => {
     try {
       setError(null);
       const { data, error } = await supabase.auth.signInWithPassword({
@@ -65,9 +65,9 @@ export function AuthProvider({ children }) {
       setError(err.message);
       throw err;
     }
-  };
+  }, []);
 
-  const signup = async (email, password) => {
+  const signup = useCallback(async (email, password) => {
     try {
       setError(null);
       const { data, error } = await supabase.auth.signUp({
@@ -80,9 +80,9 @@ export function AuthProvider({ children }) {
       setError(err.message);
       throw err;
     }
-  };
+  }, []);
 
-  const loginWithUserData = async (userData) => {
+  const loginWithUserData = useCallback(async (userData) => {
     try {
       setError(null);
       const userInfo = {
@@ -110,33 +110,33 @@ export function AuthProvider({ children }) {
       setError(err.message);
       throw err;
     }
-  };
+  }, []);
 
-  const updateCurrentUser = (patch) => {
+  const updateCurrentUser = useCallback((patch) => {
     setUser((prev) => {
-      if (!prev) return prev;
-      const next = patch ? { ...prev, ...patch } : prev;
+      if (!prev || !patch) return prev;
+      const next = { ...prev, ...patch };
       sessionStorage.setItem('currentUser', JSON.stringify(next));
       return next;
     });
-  };
+  }, []);
 
-  const logout = async () => {
+  const logout = useCallback(async () => {
     try {
       setError(null);
       console.log('Current user before logout:', user);
-      
+
       sessionStorage.removeItem('currentUser');
       const { error } = await supabase.auth.signOut();
       if (error) throw error;
       setUser(null);
-      
+
       console.log('Current user after logout:', null);
     } catch (err) {
       setError(err.message);
       throw err;
     }
-  };
+  }, [user]);
 
   const value = useMemo(
     () => ({
@@ -150,7 +150,7 @@ export function AuthProvider({ children }) {
       updateCurrentUser,
       supabase,
     }),
-    [user, loading, error]
+    [user, loading, error, login, loginWithUserData, signup, logout, updateCurrentUser]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

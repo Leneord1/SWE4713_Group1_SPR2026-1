@@ -99,10 +99,16 @@ export function HelpTooltip({ text, children, className = '' }) {
 
   const handleBlurCapture = (e) => {
     const next = e.relatedTarget;
-    if (wrapperRef.current && next && wrapperRef.current.contains(next)) {
+    if (next && wrapperRef.current?.contains(next)) {
       return;
     }
     hide();
+  };
+
+  const handleKeyDown = (e) => {
+    if (e.key === 'Escape') {
+      hide();
+    }
   };
 
   return (
@@ -115,7 +121,9 @@ export function HelpTooltip({ text, children, className = '' }) {
       onMouseLeave={handleMouseLeave}
       onFocusCapture={handleFocusCapture}
       onBlurCapture={handleBlurCapture}
-      role="presentation"
+      onKeyDown={handleKeyDown}
+      role="group"
+      tabIndex={-1}
     >
       {child}
       <span ref={bubbleRef} id={tipId} role="tooltip" className="help-tooltip-bubble">

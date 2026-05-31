@@ -23,15 +23,23 @@ function getDayCellStyle(day, isTodayFn) {
     };
   }
 
-  const today = isTodayFn(day);
-  return {
+  const isToday = isTodayFn(day);
+  const style = {
     padding: '6px 2px',
     borderRadius: '6px',
     fontSize: '13px',
-    fontWeight: today ? 700 : 400,
-    background: today ? '#0052cc' : 'transparent',
-    color: today ? '#fff' : '#0f172a',
+    fontWeight: 400,
+    background: 'transparent',
+    color: '#0f172a',
   };
+
+  if (isToday) {
+    style.fontWeight = 700;
+    style.background = '#0052cc';
+    style.color = '#fff';
+  }
+
+  return style;
 }
 
 function Calendar({ anchorRef, onClose }) {
@@ -43,8 +51,8 @@ function Calendar({ anchorRef, onClose }) {
   useEffect(() => {
     const handleClickOutside = (e) => {
       if (
-        popupRef.current && !popupRef.current.contains(e.target) &&
-        anchorRef.current && !anchorRef.current.contains(e.target)
+        popupRef.current?.contains(e.target) === false &&
+        anchorRef.current?.contains(e.target) === false
       ) {
         onClose();
       }
@@ -116,7 +124,13 @@ function Calendar({ anchorRef, onClose }) {
 }
 
 Calendar.propTypes = {
-  anchorRef: PropTypes.shape({ current: PropTypes.instanceOf(Element) }).isRequired,
+  anchorRef: PropTypes.shape({
+    current: PropTypes.oneOfType([
+      PropTypes.instanceOf(Element),
+      PropTypes.object,
+      PropTypes.oneOf([null]),
+    ]),
+  }).isRequired,
   onClose: PropTypes.func.isRequired,
 };
 
