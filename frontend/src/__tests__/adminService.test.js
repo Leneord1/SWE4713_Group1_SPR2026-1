@@ -2,20 +2,26 @@ import {describe, it, expect, vi, beforeEach} from 'vitest';
 
 // Build a chainable mock for supabase query
 function createQueryChain(resolvedValue) {
+    const promise = Promise.resolve(resolvedValue);
     const chain = {
         select: vi.fn(() => chain),
         order: vi.fn(() => chain),
         lt: vi.fn(() => chain),
         update: vi.fn(() => chain),
         eq: vi.fn(() => chain),
-        // Terminal — returns the promise
-        then: undefined,
     };
 
-    // Make the chain thenable so 'await' resolves
-    const promise = Promise.resolve(resolvedValue);
-    chain.then = promise.then.bind(promise);
-    chain.catch = promise.catch.bind(promise);
+    Object.defineProperty(chain, 'then', {
+        value: promise.then.bind(promise),
+        writable: true,
+        configurable: true,
+    });
+    Object.defineProperty(chain, 'catch', {
+        value: promise.catch.bind(promise),
+        writable: true,
+        configurable: true,
+    });
+
     return chain;
 }
 

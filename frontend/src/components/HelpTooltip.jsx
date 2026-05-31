@@ -1,4 +1,5 @@
 import { cloneElement, isValidElement, useId, useEffect, useRef, useState } from 'react';
+import PropTypes from 'prop-types';
 import './HelpTooltip.css';
 
 export function HelpTooltip({ text, children, className = '' }) {
@@ -9,21 +10,6 @@ export function HelpTooltip({ text, children, className = '' }) {
   const timerRef = useRef(null);
   const wrapperRef = useRef(null);
   const bubbleRef = useRef(null);
-
-  if (!text) {
-    return children;
-  }
-
-  if (!isValidElement(children)) {
-    return children;
-  }
-
-  const existing = children.props['aria-describedby'];
-  const describedBy = [existing, tipId].filter(Boolean).join(' ');
-
-  const child = cloneElement(children, {
-    'aria-describedby': describedBy,
-  });
 
   const clearTimer = () => {
     if (timerRef.current) {
@@ -69,6 +55,17 @@ export function HelpTooltip({ text, children, className = '' }) {
     };
   }, [visible]);
 
+  if (!text || !isValidElement(children)) {
+    return children;
+  }
+
+  const existing = children.props['aria-describedby'];
+  const describedBy = [existing, tipId].filter(Boolean).join(' ');
+
+  const child = cloneElement(children, {
+    'aria-describedby': describedBy,
+  });
+
   const show = () => setVisible(true);
   const hide = () => {
     clearTimer();
@@ -88,7 +85,7 @@ export function HelpTooltip({ text, children, className = '' }) {
   };
 
   const handleMouseLeave = () => {
-    if (wrapperRef.current && wrapperRef.current.contains(document.activeElement)) {
+    if (wrapperRef.current?.contains(document.activeElement)) {
       clearTimer();
       return;
     }
@@ -118,6 +115,7 @@ export function HelpTooltip({ text, children, className = '' }) {
       onMouseLeave={handleMouseLeave}
       onFocusCapture={handleFocusCapture}
       onBlurCapture={handleBlurCapture}
+      role="presentation"
     >
       {child}
       <span ref={bubbleRef} id={tipId} role="tooltip" className="help-tooltip-bubble">
@@ -126,3 +124,9 @@ export function HelpTooltip({ text, children, className = '' }) {
     </span>
   );
 }
+
+HelpTooltip.propTypes = {
+  text: PropTypes.string,
+  children: PropTypes.node,
+  className: PropTypes.string,
+};

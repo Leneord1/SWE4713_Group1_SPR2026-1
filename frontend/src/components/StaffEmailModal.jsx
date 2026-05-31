@@ -1,10 +1,12 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import PropTypes from 'prop-types';
 import { getEmailRecipientsByRoles } from '../services/adminService';
 import { sendAdminEmail } from '../services/emailService';
 import { HelpTooltip } from './HelpTooltip';
 import './StaffEmailModal.css';
 
 function StaffEmailModal({ isOpen, onClose, defaultSubject = '' }) {
+  const dialogRef = useRef(null);
   const [recipients, setRecipients] = useState([]);
   const [loadError, setLoadError] = useState(null);
   const [selectedId, setSelectedId] = useState('');
@@ -41,9 +43,26 @@ function StaffEmailModal({ isOpen, onClose, defaultSubject = '' }) {
     const onKey = (e) => {
       if (e.key === 'Escape' && !sending) onClose();
     };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    globalThis.addEventListener('keydown', onKey);
+    return () => globalThis.removeEventListener('keydown', onKey);
   }, [isOpen, sending, onClose]);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return undefined;
+    if (isOpen) {
+      dialog.showModal();
+    } else {
+      dialog.close();
+    }
+    return undefined;
+  }, [isOpen]);
+
+  const handleBackdropClick = (e) => {
+    if (e.target === dialogRef.current && !sending) {
+      onClose();
+    }
+  };
 
   const handleSend = async (e) => {
     e.preventDefault();
@@ -71,16 +90,15 @@ function StaffEmailModal({ isOpen, onClose, defaultSubject = '' }) {
   if (!isOpen) return null;
 
   return (
-    <div
+    <dialog
+      ref={dialogRef}
       className="sem-backdrop"
-      onClick={() => !sending && onClose()}
-      role="presentation"
+      onClick={handleBackdropClick}
+      onClose={() => !sending && onClose()}
     >
       <div
         className="sem-modal"
         onClick={(e) => e.stopPropagation()}
-        role="dialog"
-        aria-modal="true"
         aria-labelledby="sem-title"
       >
         <div className="sem-header">
@@ -126,9 +144,9 @@ function StaffEmailModal({ isOpen, onClose, defaultSubject = '' }) {
             </select>
           </div>
 
-          <div className="sem-row">
-            <label htmlFor="sem-subject" className="sem-label">Subject</label>
-            <div className="clear-input-container" role="group">
+          <fieldset className="sem-row">
+            <legend className="sem-label">Subject</legend>
+            <div className="clear-input-container">
               <input
                 id="sem-subject"
                 type="text"
@@ -140,7 +158,7 @@ function StaffEmailModal({ isOpen, onClose, defaultSubject = '' }) {
               />
               <button type="button" className="button-clear" onClick={() => setSubject('')} aria-label="Clear subject">X</button>
             </div>
-          </div>
+          </fieldset>
 
           <div className="sem-row sem-row-grow">
             <label htmlFor="sem-message" className="sem-label">Message</label>
@@ -167,8 +185,14 @@ function StaffEmailModal({ isOpen, onClose, defaultSubject = '' }) {
           </div>
         </form>
       </div>
-    </div>
+    </dialog>
   );
 }
+
+StaffEmailModal.propTypes = {
+  isOpen: PropTypes.bool.isRequired,
+  onClose: PropTypes.func.isRequired,
+  defaultSubject: PropTypes.string,
+};
 
 export default StaffEmailModal;

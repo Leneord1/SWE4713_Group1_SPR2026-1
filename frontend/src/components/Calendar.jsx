@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
+import PropTypes from 'prop-types';
 
 const navBtnStyle = {
   background: 'none',
@@ -9,6 +10,29 @@ const navBtnStyle = {
   lineHeight: 1,
   padding: '0 6px'
 };
+
+function getDayCellStyle(day, isTodayFn) {
+  if (!day) {
+    return {
+      padding: '6px 2px',
+      borderRadius: '6px',
+      fontSize: '13px',
+      fontWeight: 400,
+      background: 'transparent',
+      color: 'transparent',
+    };
+  }
+
+  const today = isTodayFn(day);
+  return {
+    padding: '6px 2px',
+    borderRadius: '6px',
+    fontSize: '13px',
+    fontWeight: today ? 700 : 400,
+    background: today ? '#0052cc' : 'transparent',
+    color: today ? '#fff' : '#0f172a',
+  };
+}
 
 function Calendar({ anchorRef, onClose }) {
   const today = new Date();
@@ -79,14 +103,10 @@ function Calendar({ anchorRef, onClose }) {
           <div key={d} style={{ fontSize: '11px', fontWeight: 600, color: '#64748b', padding: '4px 0' }}>{d}</div>
         ))}
         {cells.map((day, i) => (
-          <div key={i} style={{
-            padding: '6px 2px',
-            borderRadius: '6px',
-            fontSize: '13px',
-            fontWeight: day && isToday(day) ? 700 : 400,
-            background: day && isToday(day) ? '#0052cc' : 'transparent',
-            color: day && isToday(day) ? '#fff' : day ? '#0f172a' : 'transparent'
-          }}>
+          <div
+            key={day ? `day-${viewYear}-${viewMonth}-${day}` : `pad-${viewYear}-${viewMonth}-${i}`}
+            style={getDayCellStyle(day, isToday)}
+          >
             {day || ''}
           </div>
         ))}
@@ -94,5 +114,10 @@ function Calendar({ anchorRef, onClose }) {
     </div>
   );
 }
+
+Calendar.propTypes = {
+  anchorRef: PropTypes.shape({ current: PropTypes.instanceOf(Element) }).isRequired,
+  onClose: PropTypes.func.isRequired,
+};
 
 export default Calendar;

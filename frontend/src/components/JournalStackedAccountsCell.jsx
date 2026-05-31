@@ -1,4 +1,5 @@
 import React from 'react';
+import PropTypes from 'prop-types';
 import { partitionLinesByDebitCredit } from '../utils/journalLinePartition';
 
 const ACCOUNT_BUTTON_STYLE = {
@@ -87,3 +88,11 @@ export function JournalStackedAccountsCell({
     </td>
   );
 }
+
+JournalStackedAccountsCell.propTypes = {
+  lines: PropTypes.arrayOf(PropTypes.object),
+  journalEntryId: PropTypes.oneOfType([PropTypes.string, PropTypes.number]).isRequired,
+  navigate: PropTypes.func.isRequired,
+  ledgerBasePath: PropTypes.string.isRequired,
+  emptyLabel: PropTypes.string,
+};

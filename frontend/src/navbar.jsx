@@ -45,14 +45,14 @@ function Navbar() {
   const appendCalculatorToken = useCallback((token) => {
     setCalculatorDisplay((prev) => {
       const current = prev === '0' ? '' : prev;
-      const isNumericToken = /^[0-9.]$/.test(token);
+      const isNumericToken = /^[\d.]$/.test(token);
       if (isNumericToken) {
-        const lastNumberMatch = current.match(/(?:^|[+\-*/(])([0-9]*\.?[0-9]*)$/);
+        const lastNumberMatch = /(?:^|[+\-*/(])(\d*\.?\d*)$/.exec(current);
         const activeNumber = lastNumberMatch ? lastNumberMatch[1] : '';
         if (token === '.' && activeNumber.includes('.')) return prev;
         if (activeNumber.includes('.')) {
           const decimalPart = activeNumber.split('.')[1] || '';
-          if (/^[0-9]$/.test(token) && decimalPart.length >= 2) return prev;
+          if (/^\d$/.test(token) && decimalPart.length >= 2) return prev;
         }
       }
       const next = `${current}${token}`;
@@ -64,12 +64,12 @@ function Navbar() {
 
   const evaluateCalculator = useCallback(() => {
     try {
-      const sanitized = calculatorDisplay.replace(/[^0-9+\-*/.() ]/g, '');
+      const sanitized = calculatorDisplay.replace(/[^\d+\-*/.() ]/g, '');
       if (!sanitized.trim()) {
         setCalculatorDisplay('0');
         return;
       }
-      const result = Function(`"use strict"; return (${sanitized});`)();
+      const result = new Function(`"use strict"; return (${sanitized});`)();
       if (Number.isFinite(result)) {
         setCalculatorDisplay(formatCalculatorNumber(result));
       } else {
@@ -92,7 +92,7 @@ function Navbar() {
       if (isTypingInField) return;
 
       const { key } = event;
-      if (/^[0-9]$/.test(key)) {
+      if (/^\d$/.test(key)) {
         event.preventDefault();
         appendCalculatorToken(key);
         return;
@@ -127,8 +127,8 @@ function Navbar() {
       }
     };
 
-    window.addEventListener('keydown', onCalculatorKeyDown);
-    return () => window.removeEventListener('keydown', onCalculatorKeyDown);
+    globalThis.addEventListener('keydown', onCalculatorKeyDown);
+    return () => globalThis.removeEventListener('keydown', onCalculatorKeyDown);
   }, [appendCalculatorToken, calculatorOpen, clearCalculator, evaluateCalculator]);
 
   const handleNavigation = (path) => {
@@ -146,11 +146,9 @@ function Navbar() {
   const isManager = user?.role === 'manager';
 
   const handleDashboardNavigation = () => {
-    if (user && user.role) {
-      if (user.role === 'administrator') { handleNavigation('/admin-dashboard'); return; }
-      if (user.role === 'manager') { handleNavigation('/manager-dashboard'); return; }
-      if (user.role === 'accountant') { handleNavigation('/accountant-dashboard'); return; }
-    }
+    if (user?.role === 'administrator') { handleNavigation('/admin-dashboard'); return; }
+    if (user?.role === 'manager') { handleNavigation('/manager-dashboard'); return; }
+    if (user?.role === 'accountant') { handleNavigation('/accountant-dashboard'); return; }
     handleNavigation('/dashboard');
   };
 
@@ -167,24 +165,30 @@ function Navbar() {
         <div className="navbar-left">
           <div
             className="navbar-logo"
+            role="button"
+            tabIndex={0}
             onClick={(e) => { e.preventDefault(); handleDashboardNavigation(); }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                handleDashboardNavigation();
+              }
+            }}
           >
             <img src={logo} alt="App Logo" className="navbar-logo-img" />
             <span className="navbar-brand">Dashboard</span>
           </div>
 
           <div className="calendar-wrapper">
-            <a
+            <button
               ref={calendarAnchorRef}
-              href="#"
-              className="nav-link"
-              onClick={(e) => {
-                e.preventDefault();
-                setCalendarOpen(prev => !prev);
-              }}
+              type="button"
+              className="nav-link calendar-toggle"
+              onClick={() => setCalendarOpen(prev => !prev)}
+              aria-label="Open calendar"
             >
               <img src={calendarIcon} alt="Calendar" className="calendar-icon" />
-            </a>
+            </button>
             {calendarOpen && (
               <Calendar
                 anchorRef={calendarAnchorRef}
@@ -280,7 +284,6 @@ function Navbar() {
             </a>
           )}
           {isManager && (
-            <>
               <a
                 href="#/report"
                 className="nav-link center-link"
@@ -288,7 +291,6 @@ function Navbar() {
               >
                 Reports
               </a>
-            </>
           )}
           {canViewRatios && (
             <a
@@ -351,7 +353,19 @@ function Navbar() {
           </HelpTooltip>
         </div>
 
-        <div className="hamburger" onClick={toggleMenu}>
+        <div
+          className="hamburger"
+          role="button"
+          tabIndex={0}
+          aria-label="Toggle navigation menu"
+          onClick={toggleMenu}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              toggleMenu();
+            }
+          }}
+        >
           <span className={isMenuOpen ? 'open' : ''}></span>
           <span className={isMenuOpen ? 'open' : ''}></span>
           <span className={isMenuOpen ? 'open' : ''}></span>

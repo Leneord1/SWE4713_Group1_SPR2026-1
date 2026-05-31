@@ -1,4 +1,5 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import PropTypes from 'prop-types';
 import { supabase } from './supabaseClient';
 
 const AuthContext = createContext();
@@ -114,7 +115,7 @@ export function AuthProvider({ children }) {
   const updateCurrentUser = (patch) => {
     setUser((prev) => {
       if (!prev) return prev;
-      const next = { ...prev, ...(patch || {}) };
+      const next = patch ? { ...prev, ...patch } : prev;
       sessionStorage.setItem('currentUser', JSON.stringify(next));
       return next;
     });
@@ -137,20 +138,27 @@ export function AuthProvider({ children }) {
     }
   };
 
-  const value = {
-    user,
-    loading,
-    error,
-    login,
-    loginWithUserData,
-    signup,
-    logout,
-    updateCurrentUser,
-    supabase,
-  };
+  const value = useMemo(
+    () => ({
+      user,
+      loading,
+      error,
+      login,
+      loginWithUserData,
+      signup,
+      logout,
+      updateCurrentUser,
+      supabase,
+    }),
+    [user, loading, error]
+  );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
+
+AuthProvider.propTypes = {
+  children: PropTypes.node.isRequired,
+};
 
 export function useAuth() {
   const context = useContext(AuthContext);
@@ -159,4 +167,3 @@ export function useAuth() {
   }
   return context;
 }
-

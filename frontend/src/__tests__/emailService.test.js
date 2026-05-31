@@ -23,7 +23,7 @@ import { sendNewAccountRequest, sendAdminEmail, sendReportEmail } from '../servi
 describe('emailService', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    global.fetch = vi.fn();
+    globalThis.fetch = vi.fn();
   });
 
   // ══════════════════════════════════════════════
@@ -109,7 +109,7 @@ describe('emailService', () => {
 
   describe('sendReportEmail', () => {
     it('sends report email via /api/send-pdf with attachment', async () => {
-      global.fetch.mockResolvedValue({
+      globalThis.fetch.mockResolvedValue({
         ok: true,
         status: 200,
         text: vi.fn(async () => ''),
@@ -124,8 +124,8 @@ describe('emailService', () => {
       });
 
       expect(result).toEqual({ sent: true, attachmentIncluded: true });
-      expect(global.fetch).toHaveBeenCalledTimes(1);
-      expect(global.fetch).toHaveBeenCalledWith(
+      expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+      expect(globalThis.fetch).toHaveBeenCalledWith(
         '/api/send-pdf',
         expect.objectContaining({
           method: 'POST',

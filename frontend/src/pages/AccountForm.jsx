@@ -8,6 +8,7 @@ import {
   updateChartAccountWithActor,
 } from '../services/chartOfAccountsService';
 import { getEmailRecipientsByRoles } from '../services/adminService';
+import { sendAdminEmail } from '../services/emailService';
 import { HelpTooltip } from '../components/HelpTooltip';
 import '../global.css';
 import './AccountForm.css';
@@ -43,6 +44,120 @@ const statementTypeMap = {
   'Revenue': 'Income Statement',
   'Expenses': 'Income Statement'
 };
+
+const MONETARY_FIELDS = new Set(['initBalance']);
+
+function parseFieldValue(name, value, inputType) {
+  if (MONETARY_FIELDS.has(name)) {
+    const cleanValue = typeof value === 'string' ? value.replaceAll(',', '') : value;
+    if (cleanValue === '') return 0;
+    const parsed = Number.parseFloat(cleanValue);
+    return Number.isNaN(parsed) ? 0 : parsed;
+  }
+  if (name === 'accountNumber') {
+    return value.replace(/\D/g, '').slice(0, 8);
+  }
+  if (name === 'liquidityRank') {
+    if (value === '') return '';
+    const parsed = Number.parseInt(value, 10);
+    return Number.isNaN(parsed) ? '' : parsed;
+  }
+  return inputType === 'number' ? Number.parseFloat(value) : value;
+}
+
+function applyTypeFieldUpdates(updated, typeValue) {
+  return {
+    ...updated,
+    subType: '',
+    normalSide: normalSideMap[typeValue] || 'Debit',
+    statementType: statementTypeMap[typeValue] || '',
+  };
+}
+
+function formatCurrencyValue(value) {
+  if (value === '' || value === undefined || value === null) return '';
+  const number = Number.parseFloat(value);
+  if (Number.isNaN(number)) return '';
+  return new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(number);
+}
+
+function isDuplicateForOtherAccount(account, isEditing, currentId) {
+  if (!isEditing) return true;
+  return account.accountID !== Number.parseInt(currentId, 10);
+}
+
+function validateNewLiquidityRank(liquidityRank) {
+  if (liquidityRank === '' || liquidityRank === null || liquidityRank === undefined) {
+    return 'Liquidity rank is required. Use a whole number: lower values mean higher liquidity (e.g. 1 = most liquid).';
+  }
+  const rank = typeof liquidityRank === 'number' ? liquidityRank : Number.parseInt(liquidityRank, 10);
+  if (!Number.isInteger(rank) || rank < 1) {
+    return 'Liquidity rank must be a whole number ≥ 1. Lower numbers indicate higher liquidity.';
+  }
+  return null;
+}
+
+function resolveLiquidityRankForSave(formData, isEditing) {
+  if (!isEditing) {
+    const rank = typeof formData.liquidityRank === 'number'
+      ? formData.liquidityRank
+      : Number.parseInt(formData.liquidityRank, 10);
+    return { rank };
+  }
+  if (formData.liquidityRank === '' || formData.liquidityRank == null) {
+    return { rank: null };
+  }
+  const rank = typeof formData.liquidityRank === 'number'
+    ? formData.liquidityRank
+    : Number.parseInt(formData.liquidityRank, 10);
+  if (!Number.isInteger(rank) || rank < 1) {
+    return {
+      error: 'Liquidity rank must be a whole number ≥ 1. Lower numbers indicate higher liquidity.',
+    };
+  }
+  return { rank };
+}
+
+function buildAccountPayload(formData, resolvedAccountNumber, actorUserId, isEditing, liquidityRankForSave) {
+  return {
+    accountName: formData.accountName,
+    accountNumber: Number.parseInt(resolvedAccountNumber, 10),
+    description: formData.description,
+    comment: formData.comment,
+    normalSide: formData.normalSide,
+    type: formData.type,
+    subType: formData.subType,
+    initBalance: formData.initBalance,
+    orderNumber: Number.parseInt(formData.orderNumber, 10) || 0,
+    active: isEditing ? formData.active : true,
+    statementType: formData.statementType,
+    createdBy: isEditing ? formData.createdBy : actorUserId,
+    createdAt: isEditing ? formData.createdAt : new Date().toISOString(),
+    liquidityRank: liquidityRankForSave,
+  };
+}
+
+async function notifyAdminsOfAccountChange(accountData, user, isEditing) {
+  const { data: admins, error: adminError } = await fetchFromTable('user', {
+    select: 'email, fName, lName',
+    filters: { role: 'administrator' },
+  });
+  if (adminError || !admins) return;
+
+  const subject = `Account ${isEditing ? 'Updated' : 'Added'}: ${accountData.accountName}`;
+  const message = `The following account has been ${isEditing ? 'updated' : 'added'} by ${user.fName} ${user.lName}:
+
+        Name: ${accountData.accountName}
+        Number: ${accountData.accountNumber}
+        Category: ${accountData.type}
+        Subcategory: ${accountData.subType}
+        Initial Balance: $${accountData.initBalance}
+        Normal Side: ${accountData.normalSide}`;
+
+  for (const admin of admins) {
+    await sendAdminEmail(admin.email, `${admin.fName} ${admin.lName}`, subject, message);
+  }
+}
 
 function AccountForm() {
   const { id } = useParams();
@@ -92,10 +207,11 @@ function AccountForm() {
       try {
         setStaffLoadError(null);
         const list = await getEmailRecipientsByRoles(['manager', 'administrator']);
-        const currentUserId = user?.userID != null ? String(user.userID) : null;
-        const filtered = currentUserId
-          ? (list || []).filter((u) => String(u.userID) !== currentUserId)
-          : list;
+        const currentUserId = user?.userID == null ? null : String(user.userID);
+        const filtered = (list || []).filter((u) => {
+          if (currentUserId === null) return true;
+          return String(u.userID) !== currentUserId;
+        });
         if (!cancelled) setStaffRecipients(filtered);
       } catch (e) {
         if (!cancelled) setStaffLoadError(e?.message ?? String(e));
@@ -111,8 +227,8 @@ function AccountForm() {
     const onKey = (e) => {
       if (e.key === 'Escape' && !staffEmailSending) setStaffEmailModalOpen(false);
     };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    globalThis.addEventListener('keydown', onKey);
+    return () => globalThis.removeEventListener('keydown', onKey);
   }, [staffEmailModalOpen, staffEmailSending]);
 
   useEffect(() => {
@@ -143,7 +259,7 @@ function AccountForm() {
       const identifiers = data
         .map(acc => acc.accountNumber?.toString())
         .filter(num => num && num.startsWith(prefix) && num.length === 8)
-        .map(num => parseInt(num.substring(1), 10))
+        .map(num => Number.parseInt(num.substring(1), 10))
         .filter(n => n >= subIdx * 25 && n < (subIdx * 25) + 25);
 
       if (identifiers.length > 0) nextId = Math.max(...identifiers) + 1;
@@ -172,44 +288,13 @@ function AccountForm() {
     setFetching(false);
   };
 
-  const formatCurrency = (value) => {
-    if (value === '' || value === undefined || value === null) return '';
-    const number = parseFloat(value);
-    if (isNaN(number)) return '';
-    return new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(number);
-  };
-
   const handleChange = (e) => {
     const { name, value, type } = e.target;
-    const monetaryFields = ['initBalance'];
 
-    setFormData(prev => {
-      let updatedValue;
-      if (monetaryFields.includes(name)) {
-        const cleanValue = typeof value === 'string' ? value.replace(/,/g, '') : value;
-        updatedValue = cleanValue === '' ? 0 : parseFloat(cleanValue);
-        if (isNaN(updatedValue)) updatedValue = 0;
-      } else if (name === 'accountNumber') {
-        updatedValue = value.replace(/\D/g, '').slice(0, 8);
-      } else if (name === 'liquidityRank') {
-        if (value === '') updatedValue = '';
-        else {
-          const n = parseInt(value, 10);
-          updatedValue = Number.isNaN(n) ? '' : n;
-        }
-      } else {
-        updatedValue = type === 'number' ? parseFloat(value) : value;
-      }
-
+    setFormData((prev) => {
+      const updatedValue = parseFieldValue(name, value, type);
       const updated = { ...prev, [name]: updatedValue };
-
-      if (name === 'type') {
-        updated.subType = '';
-        updated.normalSide = normalSideMap[value] || 'Debit';
-        updated.statementType = statementTypeMap[value] || '';
-      }
-
-      return updated;
+      return name === 'type' ? applyTypeFieldUpdates(updated, value) : updated;
     });
   };
 
@@ -222,6 +307,31 @@ function AccountForm() {
       if (candidate.toString()[0] !== prefix) return null;
     }
     return candidate.toString();
+  };
+
+  const resolveAccountNumberIfNeeded = async (initialNumber) => {
+    const { data: allAccounts, error: fetchError } = await fetchFromTable('chartOfAccounts', {
+      select: 'accountNumber',
+    });
+    if (fetchError) {
+      return { error: 'Error checking existing account numbers. Please try again.' };
+    }
+
+    const existingNumbers = new Set((allAccounts || []).map((acc) => acc.accountNumber?.toString()));
+    if (!existingNumbers.has(initialNumber)) {
+      return { number: initialNumber };
+    }
+
+    const next = await findAvailableAccountNumber(Number.parseInt(initialNumber, 10) + 1, existingNumbers);
+    if (!next) {
+      return {
+        error: 'No available account numbers in this range. Please choose a different subcategory or adjust the number manually.',
+      };
+    }
+
+    setFormData((prev) => ({ ...prev, accountNumber: next }));
+    alert(`Account number ${initialNumber} was already taken. Assigned ${next} instead.`);
+    return { number: next };
   };
 
   const handleSubmit = async (e) => {
@@ -246,15 +356,14 @@ function AccountForm() {
     const { data: numberDuplicates } = await supabase
       .from('chartOfAccounts')
       .select('accountID')
-      .eq('accountNumber', parseInt(formData.accountNumber, 10));
+      .eq('accountNumber', Number.parseInt(formData.accountNumber, 10));
 
-    const numberConflict = numberDuplicates?.filter(
-      (acc) => !isEditing || acc.accountID !== parseInt(id, 10)
+    const numberConflict = (numberDuplicates || []).filter((acc) =>
+      isDuplicateForOtherAccount(acc, isEditing, id)
     );
-
-    if (numberConflict && numberConflict.length > 0) {
+    if (numberConflict.length > 0) {
       alert('An account with this account number already exists. Duplicate account numbers are not allowed.');
-      return; 
+      return;
     }
 
     const { data: nameDuplicates } = await supabase
@@ -262,18 +371,16 @@ function AccountForm() {
       .select('accountID')
       .eq('accountName', formData.accountName.trim());
 
-    const nameConflict = nameDuplicates?.filter(
-      (acc) => !isEditing || acc.accountID !== parseInt(id, 10)
+    const nameConflict = (nameDuplicates || []).filter((acc) =>
+      isDuplicateForOtherAccount(acc, isEditing, id)
     );
-
-    if (nameConflict && nameConflict.length > 0) {
+    if (nameConflict.length > 0) {
       alert('An account with this name already exists. Duplicate account names are not allowed');
       return;
     }
 
     setLoading(true);
-    const actorUserId = parseInt(user?.userID, 10);
-
+    const actorUserId = Number.parseInt(user?.userID, 10);
     if (!Number.isFinite(actorUserId) || actorUserId <= 0) {
       alert('Unable to determine current administrator user ID.');
       setLoading(false);
@@ -288,15 +395,9 @@ function AccountForm() {
     }
 
     if (!isEditing) {
-      const lr = formData.liquidityRank;
-      if (lr === '' || lr === null || lr === undefined) {
-        alert('Liquidity rank is required. Use a whole number: lower values mean higher liquidity (e.g. 1 = most liquid).');
-        setLoading(false);
-        return;
-      }
-      const rank = typeof lr === 'number' ? lr : parseInt(lr, 10);
-      if (!Number.isInteger(rank) || rank < 1) {
-        alert('Liquidity rank must be a whole number ≥ 1. Lower numbers indicate higher liquidity.');
+      const liquidityError = validateNewLiquidityRank(formData.liquidityRank);
+      if (liquidityError) {
+        alert(liquidityError);
         setLoading(false);
         return;
       }
@@ -304,96 +405,42 @@ function AccountForm() {
 
     let resolvedAccountNumber = formData.accountNumber.toString();
     if (!isEditing) {
-      const { data: allAccounts, error: fetchError } = await fetchFromTable('chartOfAccounts', {
-        select: 'accountNumber'
-      });
-
-      if (fetchError) {
-        alert('Error checking existing account numbers. Please try again.');
+      const resolved = await resolveAccountNumberIfNeeded(resolvedAccountNumber);
+      if (resolved.error) {
+        alert(resolved.error);
         setLoading(false);
         return;
       }
-
-      const existingNumbers = new Set(
-        (allAccounts || []).map(acc => acc.accountNumber?.toString())
-      );
-
-      if (existingNumbers.has(resolvedAccountNumber)) {
-        const next = await findAvailableAccountNumber(parseInt(resolvedAccountNumber, 10) + 1, existingNumbers);
-        if (!next) {
-          alert('No available account numbers in this range. Please choose a different subcategory or adjust the number manually.');
-          setLoading(false);
-          return;
-        }
-        resolvedAccountNumber = next;
-        setFormData(prev => ({ ...prev, accountNumber: resolvedAccountNumber }));
-        alert(`Account number ${formData.accountNumber} was already taken. Assigned ${resolvedAccountNumber} instead.`);
-      }
+      resolvedAccountNumber = resolved.number;
     }
 
-    let liquidityRankForSave = null;
-    if (!isEditing) {
-      liquidityRankForSave = typeof formData.liquidityRank === 'number'
-        ? formData.liquidityRank
-        : parseInt(formData.liquidityRank, 10);
-    } else if (formData.liquidityRank !== '' && formData.liquidityRank != null) {
-      const lr = typeof formData.liquidityRank === 'number'
-        ? formData.liquidityRank
-        : parseInt(formData.liquidityRank, 10);
-      if (!Number.isInteger(lr) || lr < 1) {
-        alert('Liquidity rank must be a whole number ≥ 1. Lower numbers indicate higher liquidity.');
-        setLoading(false);
-        return;
-      }
-      liquidityRankForSave = lr;
+    const liquidityResult = resolveLiquidityRankForSave(formData, isEditing);
+    if (liquidityResult.error) {
+      alert(liquidityResult.error);
+      setLoading(false);
+      return;
     }
 
-    const accountData = {
-      accountName: formData.accountName,
-      accountNumber: parseInt(resolvedAccountNumber, 10),
-      description: formData.description,
-      comment: formData.comment,
-      normalSide: formData.normalSide,
-      type: formData.type,
-      subType: formData.subType,
-      initBalance: formData.initBalance,
-      orderNumber: parseInt(formData.orderNumber, 10) || 0,
-      active: isEditing ? formData.active : true,
-      statementType: formData.statementType,
-      createdBy: isEditing ? formData.createdBy : actorUserId,
-      createdAt: isEditing ? formData.createdAt : new Date().toISOString(),
-      liquidityRank: liquidityRankForSave
-    };
+    const accountData = buildAccountPayload(
+      formData,
+      resolvedAccountNumber,
+      actorUserId,
+      isEditing,
+      liquidityResult.rank
+    );
 
     console.log('Submitting account data to Supabase:', accountData);
 
     try {
       if (isEditing) {
-        await updateChartAccountWithActor(parseInt(id, 10), accountData, actorUserId);
+        await updateChartAccountWithActor(Number.parseInt(id, 10), accountData, actorUserId);
       } else {
         await createChartAccountWithActor(accountData, actorUserId);
       }
 
       alert(`Account ${isEditing ? 'updated' : 'added'} successfully!`);
       try {
-        const { data: admins, error: adminError } = await fetchFromTable('user', {
-          select: 'email, fName, lName',
-          filters: { role: 'administrator' }
-        });
-        if (!adminError && admins) {
-          const subject = `Account ${isEditing ? 'Updated' : 'Added'}: ${accountData.accountName}`;
-          const message = `The following account has been ${isEditing ? 'updated' : 'added'} by ${user.fName} ${user.lName}:
-
-        Name: ${accountData.accountName}
-        Number: ${accountData.accountNumber}
-        Category: ${accountData.type}
-        Subcategory: ${accountData.subType}
-        Initial Balance: $${accountData.initBalance}
-        Normal Side: ${accountData.normalSide}`;
-          for (const admin of admins) {
-            await sendAdminEmail(admin.email, `${admin.fName} ${admin.lName}`, subject, message);
-          }
-        }
+        await notifyAdminsOfAccountChange(accountData, user, isEditing);
       } catch (emailErr) {
         console.warn('Failed to send admin notification emails:', emailErr);
       }
@@ -404,8 +451,6 @@ function AccountForm() {
     } finally {
       setLoading(false);
     }
-
-    setLoading(false);
   };
 
   const handleSendStaffEmail = async (e) => {
@@ -689,7 +734,7 @@ function AccountForm() {
           <input
             type="text"
             name="initBalance"
-            value={formatCurrency(formData.initBalance)}
+            value={formatCurrencyValue(formData.initBalance)}
             onChange={handleChange}
             className="input"
           />

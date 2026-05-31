@@ -1,3 +1,4 @@
+import PropTypes from 'prop-types';
 import { useNavigate } from 'react-router-dom';
 import { HelpTooltip } from './HelpTooltip';
 import './PageHelpCorner.css';
@@ -26,3 +27,7 @@ export default function PageHelpCorner({ topic }) {
     </HelpTooltip>
   );
 }
+
+PageHelpCorner.propTypes = {
+  topic: PropTypes.string,
+};

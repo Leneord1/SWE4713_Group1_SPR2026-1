@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import PropTypes from 'prop-types';
 import { getAllUsers } from '../../services/adminService';
 import { sendAdminEmail } from '../../services/emailService';
 import { supabase } from '../../supabaseClient';
@@ -133,7 +134,11 @@ function UserReport({ hideHeader }) {
                 </div>
             )}
         </div>
-    )
+    );
 }
 
-export default UserReport
+UserReport.propTypes = {
+    hideHeader: PropTypes.bool,
+};
+
+export default UserReport;

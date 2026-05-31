@@ -27,23 +27,6 @@
 
 }
 
-/* Old Color Scheme (pre-2026-04-12) - Kept for reference:
-:root {
-  --bff-primary: #0052cc;
-  --bff-button-hover: #2563EB;
-  --bff-secondary: #33A1Fd;
-  --bff-background: #f5f7fb;
-  --bff-dark-text: #0f172a;
-  --bff-light-text: white;
-  --bff-border: #D1D5DB;
-  --bff-accent: #FFFAD9;
-  --bff-table-hover: #E3D081;
-  --bff-table-even: #CCE8FF;
-  --bff-error: #dc2626;
-  --bff-error-accent: #fef2f2;
-  --bff-error-hover: #fca5a5;
-}
-*/
 * {
   margin: 0;
   padding: 0;

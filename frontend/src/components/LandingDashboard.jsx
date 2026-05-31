@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import PropTypes from 'prop-types';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../AuthContext';
 import { fetchRatioPagePeriodContext } from '../services/ratioPeriodsService';
@@ -88,7 +89,7 @@ export default function LandingDashboard({ title, subtitle, actions = [] }) {
         kind: 'times',
         ranges: {
           good: (v) => v >= 1.5,
-          warning: (v) => v >= 1.0,
+          warning: (v) => v >= 1,
           goodText: 'Healthy short-term liquidity',
           warningText: 'Borderline liquidity',
           riskText: 'Potential liquidity pressure',
@@ -99,7 +100,7 @@ export default function LandingDashboard({ title, subtitle, actions = [] }) {
         label: 'Quick Ratio',
         kind: 'times',
         ranges: {
-          good: (v) => v >= 1.0,
+          good: (v) => v >= 1,
           warning: (v) => v >= 0.8,
           goodText: 'Strong liquid coverage',
           warningText: 'Monitor near-term obligations',
@@ -235,3 +236,9 @@ export default function LandingDashboard({ title, subtitle, actions = [] }) {
     </main>
   );
 }
+
+LandingDashboard.propTypes = {
+  title: PropTypes.string.isRequired,
+  subtitle: PropTypes.string,
+  actions: PropTypes.arrayOf(PropTypes.node),
+};

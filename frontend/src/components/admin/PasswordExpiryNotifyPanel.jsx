@@ -24,27 +24,28 @@ export default function PasswordExpiryNotifyPanel() {
   };
 
   useEffect(() => {
-    if (!user || user.role !== 'administrator') return;
+    if (user?.role === 'administrator') {
+      const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD (UTC)
+      const lastRun = localStorage.getItem('passwordExpiryNotifyLastRunDate');
+      if (lastRun !== today) {
+        let cancelled = false;
+        localStorage.setItem('passwordExpiryNotifyLastRunDate', today);
 
-    const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD (UTC)
-    const lastRun = localStorage.getItem('passwordExpiryNotifyLastRunDate');
-    if (lastRun === today) return;
+        (async () => {
+          try {
+            await handleSend();
+          } catch (e) {
+            if (cancelled) return;
+            setError(e?.message ?? String(e));
+          }
+        })();
 
-    let cancelled = false;
-    localStorage.setItem('passwordExpiryNotifyLastRunDate', today);
-
-    (async () => {
-      try {
-        await handleSend();
-      } catch (e) {
-        if (cancelled) return;
-        setError(e?.message ?? String(e));
+        return () => {
+          cancelled = true;
+        };
       }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
+    }
+    return undefined;
   }, [user?.role]);
 
   return (

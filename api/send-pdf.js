@@ -3,6 +3,9 @@ import fs from "node:fs";
 import path from "node:path";
 import dotenv from "dotenv";
 
+const PDF_DATA_URI_PREFIX = /^data:application\/pdf;base64,/;
+const ATTACHMENT_DATA_URI_PREFIX = /^data:[^;]+;base64,/;
+
 function ensureEnvLoaded() {
   const required = ["SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASS", "MAIL_FROM"];
   const hasAll = required.every((key) => Boolean(process.env[key]));
@@ -42,6 +45,77 @@ function json(res, statusCode, payload) {
   res.end(JSON.stringify(payload));
 }
 
+function extractBase64FromDataUri(dataUri, prefixPattern) {
+  if (typeof dataUri !== "string") return "";
+  return String(dataUri).replace(prefixPattern, "");
+}
+
+function resolveLegacyPdfBase64(pdfBase64, pdfDataUri) {
+  if (typeof pdfBase64 === "string") return pdfBase64;
+  return extractBase64FromDataUri(pdfDataUri, PDF_DATA_URI_PREFIX);
+}
+
+function resolveAttachmentBase64(attachmentBase64, attachmentDataUri, fallback) {
+  if (typeof attachmentBase64 === "string") return attachmentBase64;
+  if (typeof attachmentDataUri === "string") {
+    return extractBase64FromDataUri(attachmentDataUri, ATTACHMENT_DATA_URI_PREFIX);
+  }
+  return fallback;
+}
+
+function resolveContentType(attachmentContentType, legacyPdfBase64) {
+  if (typeof attachmentContentType === "string" && attachmentContentType.trim()) {
+    return attachmentContentType.trim();
+  }
+  if (legacyPdfBase64) return "application/pdf";
+  return "application/octet-stream";
+}
+
+function resolveTrimmedString(value, fallback) {
+  if (typeof value === "string" && value.trim()) return value.trim();
+  return fallback;
+}
+
+async function parseRequestPayload(req) {
+  try {
+    return { payload: await readJson(req) };
+  } catch (err) {
+    const message = String(err?.message || "Invalid request");
+    if (message.toLowerCase().includes("payload too large")) {
+      return { error: { status: 413, message: "Attachment payload too large for this endpoint." } };
+    }
+    return { error: { status: 400, message: "Invalid JSON body." } };
+  }
+}
+
+function getSmtpTransporter() {
+  const { SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_SECURE, MAIL_FROM } = process.env;
+  if (!SMTP_HOST || !SMTP_PORT || !SMTP_USER || !SMTP_PASS || !MAIL_FROM) {
+    return {
+      error:
+        "Missing server configuration. Set SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, MAIL_FROM in Vercel env.",
+    };
+  }
+
+  return {
+    mailFrom: MAIL_FROM,
+    transporter: nodemailer.createTransport({
+      host: SMTP_HOST,
+      port: Number(SMTP_PORT),
+      secure: String(SMTP_SECURE).toLowerCase() === "true",
+      auth: { user: SMTP_USER, pass: SMTP_PASS },
+    }),
+  };
+}
+
+function decodeAttachment(rawAttachmentBase64) {
+  try {
+    return { buffer: Buffer.from(rawAttachmentBase64, "base64") };
+  } catch {
+    return { error: "Invalid base64 attachment" };
+  }
+}
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     res.statusCode = 405;
@@ -51,15 +125,9 @@ export default async function handler(req, res) {
 
   ensureEnvLoaded();
 
-  let payload;
-  try {
-    payload = await readJson(req);
-  } catch (err) {
-    const message = String(err?.message || "Invalid request");
-    if (message.toLowerCase().includes("payload too large")) {
-      return json(res, 413, { ok: false, error: "Attachment payload too large for this endpoint." });
-    }
-    return json(res, 400, { ok: false, error: "Invalid JSON body." });
+  const parsed = await parseRequestPayload(req);
+  if (parsed.error) {
+    return json(res, parsed.error.status, { ok: false, error: parsed.error.message });
   }
 
   const {
@@ -72,34 +140,18 @@ export default async function handler(req, res) {
     attachmentContentType,
     pdfBase64,
     pdfDataUri,
-  } = payload || {};
+  } = parsed.payload || {};
 
-  if (!to || typeof to !== "string") return json(res, 400, { ok: false, error: "`to` is required" });
+  if (!to || typeof to !== "string") {
+    return json(res, 400, { ok: false, error: "`to` is required" });
+  }
 
-  const effectiveSubject = typeof subject === "string" && subject.trim() ? subject.trim() : "Document";
-  const effectiveText = typeof text === "string" ? text : "";
-  const effectiveFilename = typeof filename === "string" && filename.trim() ? filename.trim() : "document";
-
-  const legacyPdfBase64 =
-    typeof pdfBase64 === "string"
-      ? pdfBase64
-      : typeof pdfDataUri === "string"
-        ? String(pdfDataUri).replace(/^data:application\/pdf;base64,/, "")
-        : "";
-
-  const rawAttachmentBase64 =
-    typeof attachmentBase64 === "string"
-      ? attachmentBase64
-      : typeof attachmentDataUri === "string"
-        ? String(attachmentDataUri).replace(/^data:[^;]+;base64,/, "")
-        : legacyPdfBase64;
-
-  const effectiveContentType =
-    typeof attachmentContentType === "string" && attachmentContentType.trim()
-      ? attachmentContentType.trim()
-      : legacyPdfBase64
-        ? "application/pdf"
-        : "application/octet-stream";
+  const legacyPdfBase64 = resolveLegacyPdfBase64(pdfBase64, pdfDataUri);
+  const rawAttachmentBase64 = resolveAttachmentBase64(
+    attachmentBase64,
+    attachmentDataUri,
+    legacyPdfBase64
+  );
 
   if (!rawAttachmentBase64) {
     return json(res, 400, {
@@ -108,40 +160,27 @@ export default async function handler(req, res) {
     });
   }
 
-  let attachmentBuffer;
-  try {
-    attachmentBuffer = Buffer.from(rawAttachmentBase64, "base64");
-  } catch {
-    return json(res, 400, { ok: false, error: "Invalid base64 attachment" });
+  const decoded = decodeAttachment(rawAttachmentBase64);
+  if (decoded.error) {
+    return json(res, 400, { ok: false, error: decoded.error });
   }
 
-  const { SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_SECURE, MAIL_FROM } = process.env;
-  if (!SMTP_HOST || !SMTP_PORT || !SMTP_USER || !SMTP_PASS || !MAIL_FROM) {
-    return json(res, 500, {
-      ok: false,
-      error:
-        "Missing server configuration. Set SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, MAIL_FROM in Vercel env.",
-    });
+  const smtp = getSmtpTransporter();
+  if (smtp.error) {
+    return json(res, 500, { ok: false, error: smtp.error });
   }
 
-  const transporter = nodemailer.createTransport({
-    host: SMTP_HOST,
-    port: Number(SMTP_PORT),
-    secure: String(SMTP_SECURE).toLowerCase() === "true",
-    auth: { user: SMTP_USER, pass: SMTP_PASS },
-  });
-
   try {
-    const info = await transporter.sendMail({
-      from: MAIL_FROM,
+    const info = await smtp.transporter.sendMail({
+      from: smtp.mailFrom,
       to,
-      subject: effectiveSubject,
-      text: effectiveText,
+      subject: resolveTrimmedString(subject, "Document"),
+      text: typeof text === "string" ? text : "",
       attachments: [
         {
-          filename: effectiveFilename,
-          content: attachmentBuffer,
-          contentType: effectiveContentType,
+          filename: resolveTrimmedString(filename, "document"),
+          content: decoded.buffer,
+          contentType: resolveContentType(attachmentContentType, legacyPdfBase64),
         },
       ],
     });
@@ -150,4 +189,3 @@ export default async function handler(req, res) {
     return json(res, 500, { ok: false, error: err?.message || "Failed to send email" });
   }
 }
-
