@@ -2,6 +2,25 @@ import { supabase } from '../supabaseClient';
 import { hashPassword } from '../utils/passwordHash';
 import { hashSecurityAnswer } from '../utils/securityAnswerHash';
 import { sendAdminEmail, sendNewAccountRequest } from './emailService';
+import { extractCreatedUserId, sendAccountReadyEmail } from './userNotificationHelpers';
+
+async function hashOptionalSecurityAnswers(answer1, answer2, answer3) {
+  return {
+    hashedAnswer1: answer1 ? await hashSecurityAnswer(answer1) : null,
+    hashedAnswer2: answer2 ? await hashSecurityAnswer(answer2) : null,
+    hashedAnswer3: answer3 ? await hashSecurityAnswer(answer3) : null,
+  };
+}
+
+function normalizeSecurityQuestionsRow(row) {
+  if (!row) return null;
+  const pick = (...keys) => keys.map((key) => row[key]).find((value) => value != null && value !== '') ?? '';
+  return {
+    question1: pick('question1', 'question_1', 'securityquestion1', 'securityQuestion1', 'security_question1', 'questiontext1', 'question_text1'),
+    question2: pick('question2', 'question_2', 'securityquestion2', 'securityQuestion2', 'security_question2', 'questiontext2', 'question_text2'),
+    question3: pick('question3', 'question_3', 'securityquestion3', 'securityQuestion3', 'security_question3', 'questiontext3', 'question_text3'),
+  };
+}
 
 export async function createUser(
   email,
@@ -21,24 +40,26 @@ export async function createUser(
   try {
     const hashedPassword = await hashPassword(password);
 
-    const hashedAnswer1 = answer1 ? await hashSecurityAnswer(answer1) : null;
-    const hashedAnswer2 = answer2 ? await hashSecurityAnswer(answer2) : null;
-    const hashedAnswer3 = answer3 ? await hashSecurityAnswer(answer3) : null;
+    const { hashedAnswer1, hashedAnswer2, hashedAnswer3 } = await hashOptionalSecurityAnswers(
+      answer1,
+      answer2,
+      answer3,
+    );
 
     const { data, error } = await supabase.rpc('create_user_with_actor', {
-      p_email:       email,
-      p_f_name:      fName,
-      p_l_name:      lName,
-      p_address:     address,
-      p_dob:         dob,
-      p_password:    hashedPassword,
-      p_role:        role,
+      p_email: email,
+      p_f_name: fName,
+      p_l_name: lName,
+      p_address: address,
+      p_dob: dob,
+      p_password: hashedPassword,
+      p_role: role,
       p_questionid1: questionId1,
-      p_secanswer1:  hashedAnswer1,
+      p_secanswer1: hashedAnswer1,
       p_questionid2: questionId2,
-      p_secanswer2:  hashedAnswer2,
+      p_secanswer2: hashedAnswer2,
       p_questionid3: questionId3,
-      p_secanswer3:  hashedAnswer3,
+      p_secanswer3: hashedAnswer3,
     });
 
     if (error) {
@@ -72,24 +93,26 @@ export async function admin_createUser(
   try {
     const hashedPassword = await hashPassword(password);
 
-    const hashedAnswer1 = answer1 ? await hashSecurityAnswer(answer1) : null;
-    const hashedAnswer2 = answer2 ? await hashSecurityAnswer(answer2) : null;
-    const hashedAnswer3 = answer3 ? await hashSecurityAnswer(answer3) : null;
+    const { hashedAnswer1, hashedAnswer2, hashedAnswer3 } = await hashOptionalSecurityAnswers(
+      answer1,
+      answer2,
+      answer3,
+    );
 
     const { data, error } = await supabase.rpc('create_user_with_actor', {
-      p_email:       email,
-      p_f_name:      fName,
-      p_l_name:      lName,
-      p_address:     address,
-      p_dob:         dob,
-      p_password:    hashedPassword,
-      p_role:        role,
+      p_email: email,
+      p_f_name: fName,
+      p_l_name: lName,
+      p_address: address,
+      p_dob: dob,
+      p_password: hashedPassword,
+      p_role: role,
       p_questionid1: questionId1,
-      p_secanswer1:  hashedAnswer1,
+      p_secanswer1: hashedAnswer1,
       p_questionid2: questionId2,
-      p_secanswer2:  hashedAnswer2,
+      p_secanswer2: hashedAnswer2,
       p_questionid3: questionId3,
-      p_secanswer3:  hashedAnswer3,
+      p_secanswer3: hashedAnswer3,
       p_changed_by: changedByUserId ?? null,
     });
 
@@ -101,58 +124,15 @@ export async function admin_createUser(
     const recipientEmail = String(email || '').trim();
     let accountCreationEmailSent = false;
     if (recipientEmail) {
-      const createdRow = Array.isArray(data) ? data[0] : data;
-      const createdUserId =
-        createdRow?.userID ??
-        createdRow?.userid ??
-        createdRow?.user_id ??
-        createdRow?.id ??
-        null;
-
-      let emailRecipient = recipientEmail;
-      let username = '';
-      let displayName = `${fName || ''} ${lName || ''}`.trim() || 'User';
-
       try {
-        let query = supabase
-          .from('user')
-          .select('email, fName, lName, username');
-
-        if (createdUserId != null) {
-          query = query.eq('userID', createdUserId);
-        } else {
-          query = query.eq('email', recipientEmail);
-        }
-
-        const { data: createdUserRecord, error: createdUserLookupError } = await query.maybeSingle();
-        if (createdUserLookupError) {
-          throw createdUserLookupError;
-        }
-
-        if (createdUserRecord) {
-          emailRecipient = String(createdUserRecord.email || recipientEmail).trim() || recipientEmail;
-          username = String(createdUserRecord.username || '').trim();
-          displayName =
-            `${createdUserRecord.fName || ''} ${createdUserRecord.lName || ''}`.trim() ||
-            username ||
-            displayName;
-        }
-      } catch (lookupError) {
-        console.error('Error looking up newly created user for notification email:', lookupError);
-      }
-
-      const subject = 'Your account has been created';
-      const message =
-        `Hello ${displayName},\n\n` +
-        `An administrator has created your Better Finance account.\n\n` +
-        `Username: ${username || '(not available)'}\n` +
-        `Email: ${emailRecipient}\n\n` +
-        'You can now sign in with your account credentials.\n\n' +
-        `If you did not expect this account, please contact your administrator.`;
-
-      try {
-        await sendAdminEmail(emailRecipient, displayName, subject, message);
-        accountCreationEmailSent = true;
+        accountCreationEmailSent = await sendAccountReadyEmail({
+          userId: extractCreatedUserId(data),
+          fallbackEmail: recipientEmail,
+          fallbackFName: fName,
+          fallbackLName: lName,
+          subject: 'Your account has been created',
+          bodyIntro: 'An administrator has created your Better Finance account.',
+        });
       } catch (emailError) {
         console.error('Error sending new account created email:', emailError);
       }
@@ -186,9 +166,11 @@ export async function createUserRequest(
 ) {
     try {
     const hashedPassword = await hashPassword(password);
-    const hashedAnswer1 = answer1 ? await hashSecurityAnswer(answer1) : null;
-    const hashedAnswer2 = answer2 ? await hashSecurityAnswer(answer2) : null;
-    const hashedAnswer3 = answer3 ? await hashSecurityAnswer(answer3) : null;
+    const { hashedAnswer1, hashedAnswer2, hashedAnswer3 } = await hashOptionalSecurityAnswers(
+      answer1,
+      answer2,
+      answer3,
+    );
 
     const { data } = await supabase.rpc('create_user_request', {
       p_email:       email,
@@ -388,41 +370,8 @@ export async function getUserSecurityQuestions(email, userId) {
       throw error;
     }
 
-    // Normalize
     const row = Array.isArray(data) ? data[0] : data;
-    if (!row) {
-      return null;
-    }
-
-    return {
-      question1:
-        row.question1 ??
-        row.question_1 ??
-        row.securityquestion1 ??
-        row.securityQuestion1 ??
-        row.security_question1 ??
-        row.questiontext1 ??
-        row.question_text1 ??
-        '',
-      question2:
-        row.question2 ??
-        row.question_2 ??
-        row.securityquestion2 ??
-        row.securityQuestion2 ??
-        row.security_question2 ??
-        row.questiontext2 ??
-        row.question_text2 ??
-        '',
-      question3:
-        row.question3 ??
-        row.question_3 ??
-        row.securityquestion3 ??
-        row.securityQuestion3 ??
-        row.security_question3 ??
-        row.questiontext3 ??
-        row.question_text3 ??
-        '',
-    };
+    return normalizeSecurityQuestionsRow(row);
   } catch (error) {
     console.error('Error in getUserSecurityQuestions:', error);
     throw error;
@@ -535,9 +484,11 @@ export async function updateUserPassword(userId, newPassword) {
 
 export async function adminUpdateUserSecurityAnswers(userId, answer1, answer2, answer3) {
   try {
-    const hashedAnswer1 = answer1 ? await hashSecurityAnswer(answer1) : null;
-    const hashedAnswer2 = answer2 ? await hashSecurityAnswer(answer2) : null;
-    const hashedAnswer3 = answer3 ? await hashSecurityAnswer(answer3) : null;
+    const { hashedAnswer1, hashedAnswer2, hashedAnswer3 } = await hashOptionalSecurityAnswers(
+      answer1,
+      answer2,
+      answer3,
+    );
 
     const { data, error } = await supabase.rpc('admin_update_user_security_answers', {
       p_userid: parseInt(userId, 10),
@@ -602,67 +553,20 @@ export async function approveUserRequest(userRequestId, role, changedByUserId) {
     let accountCreationEmailSent = false;
     try {
       const approvedRow = Array.isArray(data) ? data[0] : data;
-      const approvedUserId =
-        approvedRow?.userID ??
-        approvedRow?.userid ??
-        approvedRow?.user_id ??
-        approvedRow?.approved_user_id ??
-        approvedRow?.new_user_id ??
-        approvedRow?.id ??
-        null;
-      const fallbackEmail = String(
-        approvedRow?.email || requestSnapshot?.email || ''
-      ).trim();
-      const fallbackUsername = String(
-        approvedRow?.username || requestSnapshot?.username || ''
-      ).trim();
-      const fallbackDisplayName =
-        `${approvedRow?.fName || requestSnapshot?.fName || ''} ${approvedRow?.lName || requestSnapshot?.lName || ''}`.trim() ||
-        fallbackUsername ||
-        'User';
-
-      let query = supabase
-        .from('user')
-        .select('email, fName, lName, username');
-
-      if (approvedUserId != null) {
-        query = query.eq('userID', approvedUserId);
-      } else if (fallbackEmail) {
-        query = query.eq('email', fallbackEmail);
-      } else {
-        query = null;
-      }
-
-      if (query) {
-        const { data: approvedUserRecord, error: approvedUserLookupError } = await query.maybeSingle();
-        if (approvedUserLookupError) {
-          throw approvedUserLookupError;
-        }
-
-        const recipientEmail = String(approvedUserRecord?.email || fallbackEmail).trim();
-        if (recipientEmail) {
-          const username = String(approvedUserRecord?.username || fallbackUsername).trim();
-          const displayName =
-            `${approvedUserRecord?.fName || ''} ${approvedUserRecord?.lName || ''}`.trim() ||
-            username ||
-            fallbackDisplayName;
-
-          const subject = 'Your account request was approved';
-          const message =
-            `Hello ${displayName},\n\n` +
-            'Your Better Finance account request was approved by an administrator.\n\n' +
-            `Username: ${username || '(not available)'}\n` +
-            `Email: ${recipientEmail}\n\n` +
-            'You can now sign in with your account credentials.\n\n' +
-            'If you did not request this account, contact your administrator.';
-
-          await sendAdminEmail(recipientEmail, displayName, subject, message);
-          accountCreationEmailSent = true;
-        } else {
-          console.warn('Approval email not sent: approved user email is missing.');
-        }
-      } else {
+      const fallbackEmail = String(approvedRow?.email || requestSnapshot?.email || '').trim();
+      const fallbackUsername = String(approvedRow?.username || requestSnapshot?.username || '').trim();
+      if (!fallbackEmail) {
         console.warn('Approval email not sent: could not resolve approved user identity.');
+      } else {
+        accountCreationEmailSent = await sendAccountReadyEmail({
+          userId: extractCreatedUserId(data),
+          fallbackEmail,
+          fallbackUsername,
+          fallbackFName: approvedRow?.fName || requestSnapshot?.fName,
+          fallbackLName: approvedRow?.lName || requestSnapshot?.lName,
+          subject: 'Your account request was approved',
+          bodyIntro: 'Your Better Finance account request was approved by an administrator.',
+        });
       }
     } catch (notifyError) {
       console.error('Error sending approved account email:', notifyError);

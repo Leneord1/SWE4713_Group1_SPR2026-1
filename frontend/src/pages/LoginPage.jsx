@@ -8,6 +8,13 @@ import { hashPassword } from '../utils/passwordHash';
 import { useAuth } from '../AuthContext';
 import PageHelpCorner from '../components/PageHelpCorner';
 import { HelpTooltip } from '../components/HelpTooltip';
+import {
+  applyLoginSecurityUpdate as applyLoginSecurityUpdateHelper,
+  handleFailedPassword,
+  minuteLabel,
+  navigateForRole,
+  resolveActiveSuspension,
+} from '../utils/loginHelpers';
 
 function LoginPage() {
     const navigate = useNavigate();
@@ -32,36 +39,8 @@ function LoginPage() {
         navigate('/signup');
     }
 
-    const getUserField = (user, ...keys) => {
-      for (const key of keys) {
-        if (user?.[key] !== undefined && user?.[key] !== null) {
-          return user[key];
-        }
-      }
-      return null;
-    };
-
-    const applyLoginSecurityUpdate = async (userId, updates) => {
-      const { error: updateError } = await supabase
-        .from('user')
-        .update(updates)
-        .eq('userID', userId);
-
-      if (!updateError) {
-        return;
-      }
-
-      // Fallback
-      const { error: rpcError } = await supabase.rpc('update_user', {
-        p_userid: userId,
-        p_loginattempts: updates.loginAttempts ?? null,
-        p_suspendedtill: updates.suspendedTill ?? null,
-      });
-
-      if (rpcError) {
-        throw rpcError;
-      }
-    };
+    const applyLoginSecurityUpdate = (userId, updates) =>
+      applyLoginSecurityUpdateHelper(supabase, userId, updates);
 
     const handleLogin = async () => {
         try {
@@ -76,71 +55,28 @@ function LoginPage() {
             return;
           }
 
-          // Check for suspension first
           const today = new Date();
+          const suspension = await resolveActiveSuspension(userData, today, applyLoginSecurityUpdate);
+          if (suspension.blocked) {
+            alert(`Your account is currently suspended. Please try again in ${minuteLabel(suspension.minutesRemaining)}.`);
+            return;
+          }
 
-          const currentSuspendedTill = getUserField(userData, 'suspendedTill', 'suspendedtill');
-          if (currentSuspendedTill) {
-            const suspendedTillDate = new Date(currentSuspendedTill);
-            
-            // Check if current time is within suspension period
-            if (today <= suspendedTillDate) {
-              const millisecondsRemaining = suspendedTillDate - today;
-              const minutesRemaining = Math.ceil(millisecondsRemaining / (1000 * 60));
-              alert(`Your account is currently suspended. Please try again in ${minutesRemaining} minute${minutesRemaining !== 1 ? 's' : ''}.`);
-              return;
-            } else {
-              // Suspension period has passed, clear it and reset attempts
-              await applyLoginSecurityUpdate(userData.userID, {
-                suspendFrom: null,
-                suspendedTill: null,
-                loginAttempts: 3,
-              });
-            }
-          }
-          
-          if (!password || password.trim() === '') 
-          {
+          if (!password || password.trim() === '') {
             alert('Please enter a password.');
             return;
           }
-          //SHA-256 hex strings.
+
           const enteredHash = await hashPassword(password);
-          const isMatch = enteredHash === userData.password_hash;
-          
-          if (enteredHash == null)
-          {
+          if (enteredHash == null) {
             alert('Please enter a password.');
             return;
           }
-          
-          if (!isMatch) {
-            const currentAttempts = getUserField(userData, 'loginAttempts', 'loginattempts') ?? 3;
-            const newAttempts = Math.max(0, currentAttempts - 1);
-            
-            if (newAttempts === 0) {
-              // suspends account for 1 min
-              const now = new Date();
-              const suspendedTillDate = new Date(now.getTime() + 60 * 1000);
-            
-              const suspendFrom = now.toISOString();
-              const suspendedTill = suspendedTillDate.toISOString();
-              
-              await applyLoginSecurityUpdate(userData.userID, {
-                loginAttempts: 0,
-                suspendFrom: suspendFrom,
-                suspendedTill: suspendedTill,
-              });
-              
-              alert('Too many failed login attempts. Your account has been suspended for 1 minute.');
-              return;
-            } else {
-              await applyLoginSecurityUpdate(userData.userID, { loginAttempts: newAttempts });
-              
-              const remainingAttempts = newAttempts;
-              alert(`Invalid password. ${remainingAttempts} attempt${remainingAttempts !== 1 ? 's' : ''} remaining.`);
-              return;
-            }
+
+          if (enteredHash !== userData.password_hash) {
+            const failure = await handleFailedPassword(userData, applyLoginSecurityUpdate);
+            alert(failure.message);
+            return;
           }
 
           await applyLoginSecurityUpdate(userData.userID, { loginAttempts: 3 });
@@ -152,7 +88,7 @@ function LoginPage() {
             .single();
 
           const finalUserData = updatedUserData || userData;
-          
+
           try {
             await supabase.rpc('set_changed_by', { p_userid: finalUserData.userID });
           } catch (e) {
@@ -160,22 +96,8 @@ function LoginPage() {
           }
 
           await loginWithUserData(finalUserData);
-
-          if (finalUserData.role === 'administrator') {
-            navigate('/admin-dashboard');
-          }
-          else if (finalUserData.role === 'manager') {
-            navigate('/manager-dashboard');
-          }
-          else if (finalUserData.role === 'accountant') {
-            navigate('/accountant-dashboard')
-          }
-          else {
-            navigate('/');
-          }
-        }
-
-        catch (error) {
+          navigateForRole(navigate, finalUserData.role);
+        } catch (error) {
           console.error('Login error:', error);
         }
     }

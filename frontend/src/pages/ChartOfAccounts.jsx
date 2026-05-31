@@ -10,6 +10,13 @@ import { HelpTooltip } from '../components/HelpTooltip';
 import editIcon from '../../assets/Images/resourceDirectory/Edit.png';
 import deactivateIcon from '../../assets/Images/resourceDirectory/X.png';
 import activateIcon from '../../assets/Images/resourceDirectory/Check.png';
+import { CoaStaffEmailModal } from '../components/CoaStaffEmailModal';
+import {
+  attachBalancesToAccounts,
+  buildMovementByAccount,
+  getLatestEventTimestamp,
+} from '../utils/chartOfAccountsData';
+import { accountMatchesFilters, buildCoaActiveTokens } from '../utils/chartOfAccountsFilters';
 import '../global.css';
 import './ChartOfAccounts.css';
 
@@ -36,30 +43,6 @@ function shouldTryLowercaseLedgerTable(error) {
       message.includes('does not exist') ||
       (message.includes('could not find') && message.includes('table')))
   );
-}
-
-function getEventTimestamp(row) {
-  if (!row || typeof row !== 'object') return null;
-  return row.changedAt ?? row.changedat ?? row.updatedAt ?? row.updatedat ?? null;
-}
-
-function getLatestEventTimestamp(rows) {
-  const list = Array.isArray(rows) ? rows : [];
-  let latestIso = null;
-  let latestMs = Number.NEGATIVE_INFINITY;
-
-  for (const row of list) {
-    const ts = getEventTimestamp(row);
-    if (!ts) continue;
-    const ms = new Date(ts).getTime();
-    if (!Number.isFinite(ms)) continue;
-    if (ms > latestMs) {
-      latestMs = ms;
-      latestIso = ts;
-    }
-  }
-
-  return latestIso;
 }
 
 async function fetchLedgerMovementByAccount() {
@@ -184,39 +167,8 @@ function ChartOfAccounts() {
         })
       );
 
-      const movementByAccount = new Map();
-      for (const row of ledgerRows || []) {
-        const accountId = row.accountID;
-        const debit = Number(row.debit) || 0;
-        const credit = Number(row.credit) || 0;
-        const existing = movementByAccount.get(accountId) || { debit: 0, credit: 0 };
-        existing.debit += debit;
-        existing.credit += credit;
-        movementByAccount.set(accountId, existing);
-      }
-
-      const withBalances = (data || []).map((account) => {
-        const movement = movementByAccount.get(account.accountID) || { debit: 0, credit: 0 };
-        const opening = Number(account.initBalance) || 0;
-        const isCreditNormal = String(account.normalSide || '').toLowerCase() === 'credit';
-        const netMovement = isCreditNormal
-          ? movement.credit - movement.debit
-          : movement.debit - movement.credit;
-        const currentBalance = opening + netMovement;
-        return {
-          ...account,
-          ledgerDebitTotal: movement.debit,
-          ledgerCreditTotal: movement.credit,
-          currentBalance,
-          lastModifiedAt:
-            lastModifiedByAccountId.get(account.accountID) ??
-            account.updatedAt ??
-            account.createdAt ??
-            null,
-        };
-      });
-
-      setAccounts(withBalances);
+      const movementByAccount = buildMovementByAccount(ledgerRows);
+      setAccounts(attachBalancesToAccounts(data, movementByAccount, lastModifiedByAccountId));
     } catch (e) {
       console.error('Failed to load accounts with balances:', e);
       setError(e?.message || 'Failed to load current balances from the ledger.');
@@ -277,69 +229,13 @@ function ChartOfAccounts() {
     }
   };
 
-  const filteredAccounts = accounts.filter(account => {
-    const search = searchQuery.trim().toLowerCase();
-    const typedName = filters.accountName.trim().toLowerCase();
-    const typedNumber = filters.accountNumber.trim();
-    const rawAmount = filters.amountValue === '' ? NaN : Number(filters.amountValue);
-    const balance = Number(account.currentBalance ?? account.initBalance ?? 0);
-
-    const matchesSearch =
-      search === '' ||
-      (account.accountName && account.accountName.toLowerCase().includes(search)) ||
-      (account.accountNumber && account.accountNumber.toString().includes(search));
-
-    const matchesName =
-      typedName === '' ||
-      (account.accountName && account.accountName.toLowerCase().includes(typedName));
-
-    const matchesNumber =
-      typedNumber === '' ||
-      (account.accountNumber && account.accountNumber.toString().includes(typedNumber));
-
-    const matchesCategory = filters.category === '' || account.type === filters.category;
-    const matchesSubCategory = filters.subCategory === '' || account.subType === filters.subCategory;
-
-    let matchesAmount = true;
-    if (!Number.isNaN(rawAmount) && filters.amountOperator) {
-      if (filters.amountOperator === '=') matchesAmount = balance === rawAmount;
-      if (filters.amountOperator === '>') matchesAmount = balance > rawAmount;
-      if (filters.amountOperator === '<') matchesAmount = balance < rawAmount;
-      if (filters.amountOperator === '>=') matchesAmount = balance >= rawAmount;
-      if (filters.amountOperator === '<=') matchesAmount = balance <= rawAmount;
-    }
-
-    const matchesStatus =
-      filters.status === '' ||
-      (filters.status === 'Active' ? account.active : !account.active);
-
-    return (
-      matchesSearch &&
-      matchesName &&
-      matchesNumber &&
-      matchesCategory &&
-      matchesSubCategory &&
-      matchesAmount &&
-      matchesStatus
-    );
-  });
+  const filteredAccounts = accounts.filter((account) =>
+    accountMatchesFilters(account, filters, searchQuery),
+  );
 
   const selectedAccount = accounts.find(account => account.accountID?.toString() === selectedAccountId);
 
-  const activeTokens = [
-    searchQuery ? { key: 'searchQuery', label: `Search: ${searchQuery}` } : null,
-    filters.accountName ? { key: 'accountName', label: `Name: ${filters.accountName}` } : null,
-    filters.accountNumber ? { key: 'accountNumber', label: `Number: ${filters.accountNumber}` } : null,
-    filters.category ? { key: 'category', label: `Category: ${filters.category}` } : null,
-    filters.subCategory ? { key: 'subCategory', label: `Subcategory: ${filters.subCategory}` } : null,
-    filters.amountOperator && filters.amountValue !== ''
-      ? {
-          key: 'amount',
-          label: `Amount ${filters.amountOperator} ${Number(filters.amountValue).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-        }
-      : null,
-    filters.status ? { key: 'status', label: `Status: ${filters.status}` } : null
-  ].filter(Boolean);
+  const activeTokens = buildCoaActiveTokens(searchQuery, filters);
 
   const resetAllFilters = () => {
     setFilters(defaultFilters);
@@ -427,104 +323,20 @@ function ChartOfAccounts() {
             </HelpTooltip>
           )}
         </div>
-      {staffEmailModalOpen && (
-              <div
-                className="coa-email-modal-backdrop"
-                onClick={() => !staffEmailSending && setStaffEmailModalOpen(false)}
-                role="presentation"
-              >
-                <div
-                  className="coa-email-modal"
-                  onClick={(e) => e.stopPropagation()}
-                  role="dialog"
-                  aria-modal="true"
-                  aria-labelledby="coa-email-modal-title"
-                >
-                  <div className="coa-email-modal-header">
-                    <h2 id="coa-email-modal-title" className="coa-email-modal-title">
-                      Email Manager / Accountant
-                    </h2>
-                    <button
-                      type="button"
-                      className="button-primary coa-email-modal-close"
-                      aria-label="Close"
-                      disabled={staffEmailSending}
-                      onClick={() => setStaffEmailModalOpen(false)}
-                    >
-                      X
-                    </button>
-                  </div>
-                  {staffLoadError && (
-                    <p style={{ color: 'var(--bff-red)', fontSize: '0.9rem' }} role="alert">
-                      Could not load recipients: {staffLoadError}
-                    </p>
-                  )}
-                  {!staffLoadError && staffRecipients.length === 0 && (
-                    <p style={{ color: 'var(--bff-dark-text)', fontSize: '0.9rem' }}>
-                  No active managers or accountants with an email address were found.
-                    </p>
-                  )}
-                  <form onSubmit={handleSendStaffEmail} className="coa-email-staff-form">
-                    <div className="coa-email-staff-row">
-                      <label htmlFor="coa-staff-recipient" className="coa-email-staff-label">
-                        Recipient
-                      </label>
-                      <select
-                        id="coa-staff-recipient"
-                        className="input coa-email-staff-select"
-                        value={selectedStaffId}
-                        onChange={(e) => setSelectedStaffId(e.target.value)}
-                        disabled={staffRecipients.length === 0}
-                      >
-                        <option value="">— Select manager / accountant —</option>
-                        {staffRecipients.map((u) => (
-                          <option key={u.userID} value={u.userID}>
-                            {[u.fName, u.lName].filter(Boolean).join(' ') || u.username} ({u.role}) — {u.email}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                    <div className="coa-email-staff-row">
-                      <label htmlFor="coa-staff-subject" className="coa-email-staff-label">
-                        Subject
-                      </label>
-                      <div className="clear-input-container" role="group">
-                        <input
-                          id="coa-staff-subject"
-                          type="text"
-                          className="input"
-                          value={staffEmailSubject}
-                          onChange={(e) => setStaffEmailSubject(e.target.value)}
-                          placeholder="e.g., Question about account 10000001"
-                          autoComplete="off"
-                        />
-                        <button type="button" className="button-clear" onClick={() => setStaffEmailSubject('')} aria-label="Clear subject input">X</button>
-                      </div>
-                    </div>
-                    <div className="coa-email-staff-row coa-email-staff-row-grow">
-                      <label htmlFor="coa-staff-message" className="coa-email-staff-label">
-                        Message
-                      </label>
-                      <textarea
-                        id="coa-staff-message"
-                        className="input coa-email-staff-textarea"
-                        rows={4}
-                        value={staffEmailMessage}
-                        onChange={(e) => setStaffEmailMessage(e.target.value)}
-                        placeholder="Your message…"
-                      />
-                    </div>
-                    <div className="coa-email-staff-actions">
-                      <HelpTooltip text="Send this message to the selected user’s email using the configured EmailJS admin template.">
-                        <button type="submit" className="button-secondary" disabled={staffEmailSending || staffRecipients.length === 0}>
-                          {staffEmailSending ? 'Sending…' : 'Send Email'}
-                        </button>
-                      </HelpTooltip>
-                    </div>
-                  </form>
-                </div>
-              </div>
-            )}
+      <CoaStaffEmailModal
+        open={staffEmailModalOpen}
+        sending={staffEmailSending}
+        loadError={staffLoadError}
+        recipients={staffRecipients}
+        selectedStaffId={selectedStaffId}
+        onSelectedStaffIdChange={setSelectedStaffId}
+        subject={staffEmailSubject}
+        onSubjectChange={setStaffEmailSubject}
+        message={staffEmailMessage}
+        onMessageChange={setStaffEmailMessage}
+        onClose={() => setStaffEmailModalOpen(false)}
+        onSubmit={handleSendStaffEmail}
+      />
       </div>
       <div className="chart-of-accounts-container">
         {viewMode !== 'individual' && <div className="search-and-filter">

@@ -7,6 +7,7 @@ import { hashPassword } from '../utils/passwordHash';
 import { createUserRequest, getSecurityQuestions } from '../services/userService';
 import PageHelpCorner from '../components/PageHelpCorner';
 import { HelpTooltip } from '../components/HelpTooltip';
+import { validateSecurityQuestionsStep, validateSignUpStep1 } from '../utils/signUpValidation';
 
 function SignUpPage() {
     const navigate = useNavigate();
@@ -150,57 +151,37 @@ function SignUpPage() {
         e.preventDefault();
 
         if (step === 1) {
-            const emailValid = isValidEmail(email);
+            const step1 = validateSignUpStep1({
+              email,
+              dob,
+              password,
+              confirmPassword,
+              firstName,
+              lastName,
+              address,
+              todayDateString,
+              isValidEmail,
+              validatePassword,
+            });
+
             setShowEmailError(true);
-            setEmailError(emailValid ? '' : 'Not a proper email');
-
-            const dobValid = !!dob && dob <= todayDateString;
-            setDobError(dobValid ? '' : 'Date of birth cannot be in the future.');
-
-            const validation = validatePassword(password);
-            setPasswordErrors(validation.errors);
+            setEmailError(step1.emailError);
+            setDobError(step1.dobError);
+            setPasswordErrors(step1.validation.errors);
             setShowPasswordErrors(true);
+            setConfirmPasswordError(step1.confirmPasswordError);
 
-            if (password !== confirmPassword) {
-                setConfirmPasswordError('Passwords do not match');
-            } else {
-                setConfirmPasswordError('');
-            }
-
-            if (
-                validation.isValid &&
-                password === confirmPassword &&
-                email.trim() &&
-                emailValid &&
-                firstName.trim() &&
-                lastName.trim() &&
-                address.trim() &&
-                dob.trim() &&
-                dobValid
-            ) {
-                setStep(2);
-            }
-
+            if (step1.canContinue) setStep(2);
             return;
         }
 
         setSecurityQuestionsError('');
-
-        if (
-            !securityQuestion1 ||
-            !securityQuestion2 ||
-            !securityQuestion3 ||
-            !securityAnswer1.trim() ||
-            !securityAnswer2.trim() ||
-            !securityAnswer3.trim()
-        ) {
-            setSecurityQuestionsError('Please select and answer all 3 security questions.');
-            return;
-        }
-
-        const uniqueQuestions = new Set([securityQuestion1, securityQuestion2, securityQuestion3]);
-        if (uniqueQuestions.size !== 3) {
-            setSecurityQuestionsError('Please select 3 different security questions.');
+        const securityError = validateSecurityQuestionsStep(
+          [securityQuestion1, securityQuestion2, securityQuestion3],
+          [securityAnswer1, securityAnswer2, securityAnswer3],
+        );
+        if (securityError) {
+            setSecurityQuestionsError(securityError);
             return;
         }
 

@@ -81,7 +81,10 @@ async function fetchLedgerEntryDates(limit = 800) {
  */
 export function ledgerDateBoundsFromRows(rows) {
   if (!rows?.length) return { min: null, max: null };
-  const dates = rows.map((r) => r.entryDate).filter(Boolean).sort();
+  const dates = rows
+    .map((r) => r.entryDate)
+    .filter(Boolean)
+    .sort((a, b) => String(a).localeCompare(String(b)));
   return { min: dates[0] || null, max: dates[dates.length - 1] || null };
 }
 

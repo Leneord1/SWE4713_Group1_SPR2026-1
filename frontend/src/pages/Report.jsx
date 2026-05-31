@@ -106,7 +106,7 @@ function Report() {
     (e) => {
       const el = e.target.closest('[data-ledger-account]');
       if (!el) return;
-      const num = el.getAttribute('data-ledger-account');
+      const num = el.dataset.ledgerAccount;
       e.preventDefault();
       navigateToLedgerAccount(num);
     },
@@ -119,7 +119,7 @@ function Report() {
       const el = e.target.closest('[data-ledger-account]');
       if (!el || e.target !== el) return;
       e.preventDefault();
-      navigateToLedgerAccount(el.getAttribute('data-ledger-account'));
+      navigateToLedgerAccount(el.dataset.ledgerAccount);
     },
     [navigateToLedgerAccount],
   );

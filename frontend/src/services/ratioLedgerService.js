@@ -46,7 +46,7 @@ function netMovement(account, debit, credit) {
   return isCreditNormal(account) ? c - d : d - c;
 }
 
-function absAmount(account, debit, credit) {
+export function absAmount(account, debit, credit) {
   return Math.abs(netMovement(account, debit, credit));
 }
 
@@ -62,7 +62,7 @@ const CONTRA_ASSET_RE = /accumulated\s+depreciation|allowance/i;
 const LEASE_NAME_RE = /lease|rent/i;
 const TAX_NAME_RE = /tax|income\s+tax/i;
 
-function classifyAccount(a) {
+export function classifyAccount(a) {
   const type = String(a.type || '').toLowerCase();
   const sub = String(a.subType || '').toLowerCase();
   const name = String(a.accountName || '').toLowerCase();
@@ -176,6 +176,213 @@ function absBalanceAtIndex(balanceArrays, account, quarterIndex) {
   return Math.abs(arr[quarterIndex]);
 }
 
+function emptySeries(length) {
+  return Array(length).fill(null);
+}
+
+function indexLedgerByAccount(ledgerRows) {
+  const entriesByAccount = new Map();
+  for (const e of ledgerRows) {
+    const id = e.accountID;
+    if (!entriesByAccount.has(id)) entriesByAccount.set(id, []);
+    entriesByAccount.get(id).push(e);
+  }
+  for (const [, list] of entriesByAccount) {
+    list.sort((a, b) => {
+      const da = a.entryDate ? String(a.entryDate).slice(0, 10) : '';
+      const db = b.entryDate ? String(b.entryDate).slice(0, 10) : '';
+      if (da !== db) return da < db ? -1 : 1;
+      return (a.ledgerID || 0) - (b.ledgerID || 0);
+    });
+  }
+  return entriesByAccount;
+}
+
+function aggregatePeriodFlows(ledgerRows, accountsById, classificationById, start, end) {
+  let rev = 0;
+  let salesQ = 0;
+  let exp = 0;
+  let cogsQ = 0;
+  let intByNameQ = 0;
+  let intFinancialQ = 0;
+  let leaseQ = 0;
+  let taxQ = 0;
+
+  for (const e of ledgerRows) {
+    const dStr = e.entryDate ? String(e.entryDate).slice(0, 10) : '';
+    if (!dStr || dStr < start || dStr > end) continue;
+
+    const acct = accountsById.get(e.accountID);
+    const c = classificationById.get(e.accountID);
+    if (!acct || !c) continue;
+
+    const amt = absAmount(acct, e.debit, e.credit);
+    if (c.isRevenue) {
+      rev += amt;
+      if (c.isSales) salesQ += amt;
+    }
+    if (c.isExpense) {
+      exp += amt;
+      if (c.isCogs) cogsQ += amt;
+      if (c.isInterestCharge) intByNameQ += amt;
+      if (c.isFinancialExpense) intFinancialQ += amt;
+      if (c.isTaxExpense) taxQ += amt;
+    }
+    if (c.isLeaseObligation) leaseQ += amt;
+  }
+
+  return {
+    sales: salesQ > 0 ? salesQ : rev,
+    cogs: cogsQ,
+    interestExp: intByNameQ > 0 ? intByNameQ : intFinancialQ,
+    leaseObligations: leaseQ,
+    taxExp: taxQ,
+    netIncome: rev - exp,
+  };
+}
+
+function aggregatePeriodBalances(classified, balanceAt, index) {
+  let ta = 0;
+  let tl = 0;
+  let te = 0;
+  let ca = 0;
+  let cl = 0;
+  let lt = 0;
+  let fa = 0;
+  let inv = 0;
+  let arVal = 0;
+
+  for (const { account: a, c } of classified) {
+    if (c.isAsset) ta += absBalanceAtIndex(balanceAt, a, index);
+    if (c.isLiability) tl += absBalanceAtIndex(balanceAt, a, index);
+    if (c.isEquity) te += absBalanceAtIndex(balanceAt, a, index);
+    if (c.isCurrentAsset) ca += absBalanceAtIndex(balanceAt, a, index);
+    if (c.isCurrentLiab) cl += absBalanceAtIndex(balanceAt, a, index);
+    if (c.isLongTermLiab) lt += absBalanceAtIndex(balanceAt, a, index);
+    if (c.isFixedAsset) fa += absBalanceAtIndex(balanceAt, a, index);
+    if (c.isInventory) inv += absBalanceAtIndex(balanceAt, a, index);
+    if (c.isReceivable) arVal += absBalanceAtIndex(balanceAt, a, index);
+  }
+
+  return { totalAssets: ta, totalLiab: tl, totalEquity: te, currentAssets: ca, currentLiab: cl, longTermLiab: lt, fixedAssets: fa, inventory: inv, ar: arVal };
+}
+
+function buildRatioSeriesFromMetrics(periodCount, flows, balances) {
+  const series = {
+    grossMargin: emptySeries(periodCount),
+    operatingMargin: emptySeries(periodCount),
+    netMargin: emptySeries(periodCount),
+    roa: emptySeries(periodCount),
+    roe: emptySeries(periodCount),
+    roce: emptySeries(periodCount),
+    currentRatio: emptySeries(periodCount),
+    quickRatio: emptySeries(periodCount),
+    invToNwc: emptySeries(periodCount),
+    debtToAssets: emptySeries(periodCount),
+    debtToEquity: emptySeries(periodCount),
+    ltDebtToEquity: emptySeries(periodCount),
+    tie: emptySeries(periodCount),
+    fixedCharge: emptySeries(periodCount),
+    invTurnover: emptySeries(periodCount),
+    faturn: emptySeries(periodCount),
+    taturn: emptySeries(periodCount),
+    arTurnover: emptySeries(periodCount),
+    collectionDays: emptySeries(periodCount),
+  };
+
+  for (let i = 0; i < periodCount; i++) {
+    const rev = flows.sales[i] || 0;
+    const cogsQ = flows.cogs[i] || 0;
+    const intQ = flows.interestExp[i] || 0;
+    const leaseQ = flows.leaseObligations[i] || 0;
+    const taxQ = flows.taxExp[i] || 0;
+    const ni = flows.netIncome[i] ?? 0;
+    const ta = balances.totalAssets[i] || 0;
+    const teq = balances.totalEquity[i] || 0;
+    const tl = balances.totalLiab[i] || 0;
+    const ca = balances.currentAssets[i] || 0;
+    const cl = balances.currentLiab[i] || 0;
+    const inv = balances.inventory[i] || 0;
+    const fa = balances.fixedAssets[i] || 0;
+    const arV = balances.ar[i] || 0;
+    const lt = balances.longTermLiab[i] || 0;
+
+    series.grossMargin[i] = rev > 0 ? (rev - cogsQ) / rev : null;
+    const ebitProxy = ni + intQ + taxQ;
+    series.operatingMargin[i] = rev > 0 ? ebitProxy / rev : null;
+    series.netMargin[i] = rev > 0 ? ni / rev : null;
+    series.roa[i] = ta > 0 ? ni / ta : null;
+    series.roe[i] = teq > 0 ? ni / teq : null;
+    series.roce[i] = teq > 0 ? ni / teq : null;
+    series.currentRatio[i] = cl > 0 ? ca / cl : null;
+    series.quickRatio[i] = cl > 0 ? (ca - inv) / cl : null;
+    const nwc = ca - cl;
+    series.invToNwc[i] = nwc !== 0 ? inv / nwc : null;
+    series.debtToAssets[i] = ta > 0 ? tl / ta : null;
+    series.debtToEquity[i] = teq > 0 ? tl / teq : null;
+    series.ltDebtToEquity[i] = teq > 0 ? lt / teq : null;
+    series.tie[i] = intQ > 0 ? ebitProxy / intQ : null;
+    series.fixedCharge[i] = intQ + leaseQ > 0 ? (ebitProxy + leaseQ) / (intQ + leaseQ) : null;
+    series.invTurnover[i] = inv > 0 ? rev / inv : null;
+    series.faturn[i] = fa > 0 ? rev / fa : null;
+    series.taturn[i] = ta > 0 ? rev / ta : null;
+    const annualCreditSales = rev * 52;
+    series.arTurnover[i] = arV > 0 && annualCreditSales > 0 ? annualCreditSales / arV : null;
+    const avgDailySales = annualCreditSales > 0 ? annualCreditSales / 365 : 0;
+    series.collectionDays[i] = arV > 0 && avgDailySales > 0 ? arV / avgDailySales : null;
+  }
+
+  return series;
+}
+
+function collectPeriodMetrics(periodEnds, ledgerRows, accountsById, classificationById, classified, balanceAt) {
+  const n = periodEnds.length;
+  const flows = {
+    sales: emptySeries(n),
+    cogs: emptySeries(n),
+    interestExp: emptySeries(n),
+    leaseObligations: emptySeries(n),
+    taxExp: emptySeries(n),
+    netIncome: emptySeries(n),
+  };
+  const balances = {
+    totalAssets: emptySeries(n),
+    totalLiab: emptySeries(n),
+    totalEquity: emptySeries(n),
+    currentAssets: emptySeries(n),
+    currentLiab: emptySeries(n),
+    longTermLiab: emptySeries(n),
+    fixedAssets: emptySeries(n),
+    inventory: emptySeries(n),
+    ar: emptySeries(n),
+  };
+
+  for (let i = 0; i < n; i++) {
+    const end = periodEnds[i];
+    const start = shiftYmd(end, -6);
+    const periodFlows = aggregatePeriodFlows(ledgerRows, accountsById, classificationById, start, end);
+    flows.sales[i] = periodFlows.sales;
+    flows.cogs[i] = periodFlows.cogs;
+    flows.interestExp[i] = periodFlows.interestExp;
+    flows.leaseObligations[i] = periodFlows.leaseObligations;
+    flows.taxExp[i] = periodFlows.taxExp;
+    flows.netIncome[i] = periodFlows.netIncome;
+
+    const periodBalances = aggregatePeriodBalances(classified, balanceAt, i);
+    balances.totalAssets[i] = periodBalances.totalAssets;
+    balances.totalLiab[i] = periodBalances.totalLiab;
+    balances.totalEquity[i] = periodBalances.totalEquity;
+    balances.currentAssets[i] = periodBalances.currentAssets;
+    balances.currentLiab[i] = periodBalances.currentLiab;
+    balances.longTermLiab[i] = periodBalances.longTermLiab;
+    balances.fixedAssets[i] = periodBalances.fixedAssets;
+    balances.inventory[i] = periodBalances.inventory;
+    balances.ar[i] = periodBalances.ar;
+  }
+
+  return { flows, balances };
+}
+
 /**
  * @param {string[]} periodLabels — old first
  * @returns {Promise<{
@@ -194,223 +401,24 @@ export async function fetchRatioSeriesFromLedger(periodLabels) {
 
     const accountsById = new Map(accounts.map((a) => [a.accountID, a]));
     const classified = accounts.map((a) => ({ account: a, c: classifyAccount(a) }));
+    const classificationById = new Map(
+      classified.map(({ account, c }) => [account.accountID, c]),
+    );
 
-    /** @type {Map<number| string, object[]>} */
-    const entriesByAccount = new Map();
-    for (const e of ledgerRows) {
-      const id = e.accountID;
-      if (!entriesByAccount.has(id)) entriesByAccount.set(id, []);
-      entriesByAccount.get(id).push(e);
-    }
-    for (const [, list] of entriesByAccount) {
-      list.sort((a, b) => {
-        const da = a.entryDate ? String(a.entryDate).slice(0, 10) : '';
-        const db = b.entryDate ? String(b.entryDate).slice(0, 10) : '';
-        if (da !== db) return da < db ? -1 : 1;
-        return (a.ledgerID || 0) - (b.ledgerID || 0);
-      });
-    }
-
+    const entriesByAccount = indexLedgerByAccount(ledgerRows);
     const balanceAt = computeEndingBalancesByPeriod(accounts, entriesByAccount, periodEnds);
-
-    const n = periodEnds.length;
-    const z = () => Array(n).fill(null);
-
-    const revenue = [...z()];
-    const sales = [...z()];
-    const cogs = [...z()];
-    const interestExp = [...z()];
-    const leaseObligations = [...z()];
-    const taxExp = [...z()];
-
-    const totalAssets = [...z()];
-    const totalLiab = [...z()];
-    const totalEquity = [...z()];
-    const currentAssets = [...z()];
-    const currentLiab = [...z()];
-    const longTermLiab = [...z()];
-    const fixedAssets = [...z()];
-    const inventory = [...z()];
-    const ar = [...z()];
-
-    const netIncome = [...z()];
-
-    for (let i = 0; i < n; i++) {
-      const end = periodEnds[i];
-      const start = shiftYmd(end, -6);
-
-      let rev = 0;
-      let salesQ = 0;
-      let exp = 0;
-      let cogsQ = 0;
-      let intByNameQ = 0;
-      let intFinancialQ = 0;
-      let leaseQ = 0;
-      let taxQ = 0;
-
-      for (const e of ledgerRows) {
-        const dStr = e.entryDate ? String(e.entryDate).slice(0, 10) : '';
-        if (!dStr || dStr < start || dStr > end) continue;
-        const acct = accountsById.get(e.accountID);
-        if (!acct) continue;
-        const c = classifyAccount(acct);
-        const amt = absAmount(acct, e.debit, e.credit);
-        if (c.isRevenue) {
-          rev += amt;
-          if (c.isSales) salesQ += amt;
-        }
-        if (c.isExpense) {
-          exp += amt;
-          if (c.isCogs) cogsQ += amt;
-          if (c.isInterestCharge) intByNameQ += amt;
-          if (c.isFinancialExpense) intFinancialQ += amt;
-          if (c.isTaxExpense) taxQ += amt;
-        }
-        if (c.isLeaseObligation) {
-          leaseQ += amt;
-        }
-      }
-
-      revenue[i] = rev;
-      sales[i] = salesQ > 0 ? salesQ : rev;
-      cogs[i] = cogsQ;
-      const intQ = intByNameQ > 0 ? intByNameQ : intFinancialQ;
-      interestExp[i] = intQ;
-      leaseObligations[i] = leaseQ;
-      taxExp[i] = taxQ;
-      netIncome[i] = rev - exp;
-
-      let ta = 0;
-      let tl = 0;
-      let te = 0;
-      let ca = 0;
-      let cl = 0;
-      let lt = 0;
-      let fa = 0;
-      let inv = 0;
-      let arVal = 0;
-
-      for (const { account: a, c } of classified) {
-        if (c.isAsset) ta += absBalanceAtIndex(balanceAt, a, i);
-        if (c.isLiability) tl += absBalanceAtIndex(balanceAt, a, i);
-        if (c.isEquity) te += absBalanceAtIndex(balanceAt, a, i);
-        if (c.isCurrentAsset) ca += absBalanceAtIndex(balanceAt, a, i);
-        if (c.isCurrentLiab) cl += absBalanceAtIndex(balanceAt, a, i);
-        if (c.isLongTermLiab) lt += absBalanceAtIndex(balanceAt, a, i);
-        if (c.isFixedAsset) fa += absBalanceAtIndex(balanceAt, a, i);
-        if (c.isInventory) inv += absBalanceAtIndex(balanceAt, a, i);
-        if (c.isReceivable) arVal += absBalanceAtIndex(balanceAt, a, i);
-      }
-
-      totalAssets[i] = ta;
-      totalLiab[i] = tl;
-      totalEquity[i] = te;
-      currentAssets[i] = ca;
-      currentLiab[i] = cl;
-      longTermLiab[i] = lt;
-      fixedAssets[i] = fa;
-      inventory[i] = inv;
-      ar[i] = arVal;
-    }
-
-    const grossMargin = z();
-    const operatingMargin = z();
-    const netMargin = z();
-    const roa = z();
-    const roe = z();
-    const roce = z();
-
-    const currentRatio = z();
-    const quickRatio = z();
-    const invToNwc = z();
-
-    const debtToAssets = z();
-    const debtToEquity = z();
-    const ltDebtToEquity = z();
-    const tie = z();
-    const fixedCharge = z();
-
-    const invTurnover = z();
-    const faturn = z();
-    const taturn = z();
-    const arTurnover = z();
-    const collectionDays = z();
-
-    for (let i = 0; i < n; i++) {
-      const rev = sales[i] || 0;
-      const cogsQ = cogs[i] || 0;
-      const intQ = interestExp[i] || 0;
-      const leaseQ = leaseObligations[i] || 0;
-      const taxQ = taxExp[i] || 0;
-      const ni = netIncome[i] ?? 0;
-      const ta = totalAssets[i] || 0;
-      const teq = totalEquity[i] || 0;
-      const tl = totalLiab[i] || 0;
-      const ca = currentAssets[i] || 0;
-      const cl = currentLiab[i] || 0;
-      const inv = inventory[i] || 0;
-      const fa = fixedAssets[i] || 0;
-      const arV = ar[i] || 0;
-      const lt = longTermLiab[i] || 0;
-
-      grossMargin[i] = rev > 0 ? (rev - cogsQ) / rev : null;
-
-      const ebitProxy = ni + intQ + taxQ;
-      operatingMargin[i] = rev > 0 ? ebitProxy / rev : null;
-      netMargin[i] = rev > 0 ? ni / rev : null;
-
-      roa[i] = ta > 0 ? ni / ta : null;
-      roe[i] = teq > 0 ? ni / teq : null;
-
-      const commonEquity = teq;
-      roce[i] = commonEquity > 0 ? ni / commonEquity : null;
-
-      currentRatio[i] = cl > 0 ? ca / cl : null;
-      quickRatio[i] = cl > 0 ? (ca - inv) / cl : null;
-      const nwc = ca - cl;
-      invToNwc[i] = nwc !== 0 ? inv / nwc : null;
-
-      debtToAssets[i] = ta > 0 ? tl / ta : null;
-      debtToEquity[i] = teq > 0 ? tl / teq : null;
-      ltDebtToEquity[i] = teq > 0 ? lt / teq : null;
-
-      tie[i] = intQ > 0 ? ebitProxy / intQ : null;
-      fixedCharge[i] = (intQ + leaseQ) > 0 ? (ebitProxy + leaseQ) / (intQ + leaseQ) : null;
-
-      invTurnover[i] = inv > 0 ? rev / inv : null;
-
-      faturn[i] = fa > 0 ? rev / fa : null;
-      taturn[i] = ta > 0 ? rev / ta : null;
-
-      const annualCreditSales = rev * 52;
-      arTurnover[i] = arV > 0 && annualCreditSales > 0 ? annualCreditSales / arV : null;
-      const avgDailySales = annualCreditSales > 0 ? annualCreditSales / 365 : 0;
-      collectionDays[i] = arV > 0 && avgDailySales > 0 ? arV / avgDailySales : null;
-    }
+    const { flows, balances } = collectPeriodMetrics(
+      periodEnds,
+      ledgerRows,
+      accountsById,
+      classificationById,
+      classified,
+      balanceAt,
+    );
 
     return {
       error: null,
-      series: {
-        grossMargin,
-        operatingMargin,
-        netMargin,
-        roa,
-        roe,
-        roce,
-        currentRatio,
-        quickRatio,
-        invToNwc,
-        debtToAssets,
-        debtToEquity,
-        ltDebtToEquity,
-        tie,
-        fixedCharge,
-        invTurnover,
-        faturn,
-        taturn,
-        arTurnover,
-        collectionDays,
-      },
+      series: buildRatioSeriesFromMetrics(periodEnds.length, flows, balances),
     };
   } catch (err) {
     console.error('fetchRatioSeriesFromLedger:', err);
