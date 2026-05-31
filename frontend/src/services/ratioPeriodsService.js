@@ -75,16 +75,18 @@ async function fetchLedgerEntryDates(limit = 800) {
   return [];
 }
 
+/** @param {unknown} a @param {unknown} b @returns {number} */
+export function compareLocaleStrings(a, b) {
+  return String(a).localeCompare(String(b));
+}
+
 /**
  * @param {{ entryDate?: string | null }[]} rows
  * @returns {{ min: string | null, max: string | null }}
  */
 export function ledgerDateBoundsFromRows(rows) {
   if (!rows?.length) return { min: null, max: null };
-  const dates = rows
-    .map((r) => r.entryDate)
-    .filter(Boolean)
-    .sort((a, b) => String(a).localeCompare(String(b)));
+  const dates = rows.map((r) => r.entryDate).filter(Boolean).sort(compareLocaleStrings);
   return { min: dates[0] || null, max: dates[dates.length - 1] || null };
 }
 

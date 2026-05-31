@@ -7,6 +7,7 @@ vi.mock('../supabaseClient', () => ({
 }));
 
 import {
+  compareLocaleStrings,
   currentQuarterWeekLabels,
   ledgerDateBoundsFromRows,
   buildRatioPeriodLabelsFromRows,
@@ -24,6 +25,13 @@ describe('ratioPeriodsService', () => {
     it('returns one label when anchor is the first day of a quarter', () => {
       const labels = currentQuarterWeekLabels(new Date(2026, 0, 1));
       expect(labels).toEqual(['2026-01-01']);
+    });
+  });
+
+  describe('compareLocaleStrings', () => {
+    it('sorts ISO date strings in chronological order', () => {
+      const dates = ['2026-03-01', '2026-01-15', '2026-02-20'].sort(compareLocaleStrings);
+      expect(dates).toEqual(['2026-01-15', '2026-02-20', '2026-03-01']);
     });
   });
 
